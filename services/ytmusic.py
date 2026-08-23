@@ -1,14 +1,20 @@
+
 from ytmusicapi import YTMusic
 
 
 class YouTubeMusic:
 
     def __init__(self):
-        print("Inicializando YouTube Music...")
+
+        print(
+            "Inicializando YouTube Music..."
+        )
 
         self.ytmusic = YTMusic()
 
-        print("Conectado.")
+        print(
+            "Conectado."
+        )
 
     def search_song(
         self,
@@ -16,7 +22,10 @@ class YouTubeMusic:
         title,
         album=None,
     ):
-        query = f"{artist} - {title}"
+
+        query = (
+            f"{artist} - {title}"
+        )
 
         print()
         print(
@@ -30,7 +39,11 @@ class YouTubeMusic:
         )
 
         if not results:
-            print("No se encontraron resultados.")
+
+            print(
+                "No se encontraron resultados."
+            )
+
             return None
 
         valid_results = []
@@ -54,9 +67,12 @@ class YouTubeMusic:
             result_album_name = ""
 
             if result_album:
-                result_album_name = result_album.get(
-                    "name",
-                    "",
+
+                result_album_name = (
+                    result_album.get(
+                        "name",
+                        "",
+                    )
                 )
 
             # --------------------------------
@@ -64,7 +80,10 @@ class YouTubeMusic:
             # --------------------------------
 
             artist_names = [
-                item.get("name", "")
+                item.get(
+                    "name",
+                    "",
+                )
                 for item in result_artists
             ]
 
@@ -119,13 +138,12 @@ class YouTubeMusic:
             ):
                 continue
 
-            # --------------------------------
-            # GUARDAR
-            # --------------------------------
-
-            valid_results.append(result)
+            valid_results.append(
+                result
+            )
 
         if not valid_results:
+
             print(
                 "No se encontraron "
                 "resultados válidos."
@@ -133,15 +151,13 @@ class YouTubeMusic:
 
             return None
 
-        # ------------------------------------
-        # ELEGIR MEJOR RESULTADO
-        # ------------------------------------
-
-        best_result = self._select_best_result(
-            valid_results,
-            artist,
-            title,
-            album,
+        best_result = (
+            self._select_best_result(
+                valid_results,
+                artist,
+                title,
+                album,
+            )
         )
 
         if best_result is None:
@@ -153,7 +169,10 @@ class YouTubeMusic:
         )
 
         artist_names = [
-            item.get("name", "")
+            item.get(
+                "name",
+                ""
+            )
             for item in artists
         ]
 
@@ -164,9 +183,12 @@ class YouTubeMusic:
         album_name = ""
 
         if album_data:
-            album_name = album_data.get(
-                "name",
-                "",
+
+            album_name = (
+                album_data.get(
+                    "name",
+                    "",
+                )
             )
 
         return {
@@ -196,6 +218,7 @@ class YouTubeMusic:
         title,
         album,
     ):
+
         title_lower = title.lower()
         artist_lower = artist.lower()
 
@@ -206,10 +229,12 @@ class YouTubeMusic:
 
             score = 0
 
-            result_title = result.get(
-                "title",
-                "",
-            ).lower()
+            result_title = (
+                result.get(
+                    "title",
+                    "",
+                ).lower()
+            )
 
             artists = result.get(
                 "artists",
@@ -217,7 +242,10 @@ class YouTubeMusic:
             )
 
             artist_names = [
-                item.get("name", "").lower()
+                item.get(
+                    "name",
+                    ""
+                ).lower()
                 for item in artists
             ]
 
@@ -228,19 +256,24 @@ class YouTubeMusic:
             album_name = ""
 
             if result_album:
-                album_name = result_album.get(
-                    "name",
-                    "",
-                ).lower()
+
+                album_name = (
+                    result_album.get(
+                        "name",
+                        "",
+                    ).lower()
+                )
 
             # --------------------------------
             # TÍTULO
             # --------------------------------
 
             if result_title == title_lower:
+
                 score += 100
 
             elif title_lower in result_title:
+
                 score += 50
 
             # --------------------------------
@@ -248,12 +281,14 @@ class YouTubeMusic:
             # --------------------------------
 
             if artist_lower in artist_names:
+
                 score += 100
 
             elif any(
                 artist_lower in name
                 for name in artist_names
             ):
+
                 score += 50
 
             # --------------------------------
@@ -265,13 +300,15 @@ class YouTubeMusic:
                 album_lower = album.lower()
 
                 if album_name == album_lower:
+
                     score += 150
 
                 elif album_lower in album_name:
+
                     score += 75
 
             # --------------------------------
-            # RESULTADO
+            # MEJOR RESULTADO
             # --------------------------------
 
             if score > best_score:

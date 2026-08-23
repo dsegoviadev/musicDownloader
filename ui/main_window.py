@@ -50,7 +50,7 @@ class MainWindow(QMainWindow):
         # SERVICIOS
         # -----------------------------
 
-        self.youtube_music = (
+        self.ytmusic = (
             YouTubeMusic()
         )
 
@@ -168,12 +168,10 @@ class MainWindow(QMainWindow):
             ["Álbumes / Canciones"]
         )
 
-        # Checkbox
         self.results_tree.itemChanged.connect(
             self.handle_item_changed
         )
 
-        # Flecha / expansión
         self.results_tree.itemExpanded.connect(
             self.handle_item_expanded
         )
@@ -363,7 +361,6 @@ class MainWindow(QMainWindow):
             Qt.UserRole,
         )
 
-        # Solo nos interesan álbumes
         if item_type != "album":
             return
 
@@ -372,7 +369,6 @@ class MainWindow(QMainWindow):
             Qt.UserRole + 2,
         )
 
-        # Ya cargado -> no hacemos otro request
         if loaded:
             return
 
@@ -388,10 +384,6 @@ class MainWindow(QMainWindow):
         self,
         album,
     ):
-
-        # --------------------------------
-        # Ya cargado
-        # --------------------------------
 
         loaded = album.data(
             0,
@@ -424,20 +416,12 @@ class MainWindow(QMainWindow):
             f"{release_group_mbid}"
         )
 
-        # --------------------------------
-        # Mostrar estado
-        # --------------------------------
-
         self.status_label.setText(
             f"Cargando canciones: "
             f"{album_name}..."
         )
 
         QApplication.processEvents()
-
-        # --------------------------------
-        # Request
-        # --------------------------------
 
         try:
 
@@ -461,10 +445,6 @@ class MainWindow(QMainWindow):
 
             return False
 
-        # --------------------------------
-        # No encontramos canciones
-        # --------------------------------
-
         if not songs:
 
             print(
@@ -478,10 +458,6 @@ class MainWindow(QMainWindow):
 
             return False
 
-        # --------------------------------
-        # Eliminar placeholder
-        # --------------------------------
-
         blocker = QSignalBlocker(
             self.results_tree
         )
@@ -491,10 +467,6 @@ class MainWindow(QMainWindow):
             child = album.takeChild(0)
 
             del child
-
-        # --------------------------------
-        # Crear canciones
-        # --------------------------------
 
         for song_name in songs:
 
@@ -513,10 +485,6 @@ class MainWindow(QMainWindow):
                 0,
                 Qt.Unchecked,
             )
-
-        # --------------------------------
-        # Marcar como cargado
-        # --------------------------------
 
         album.setData(
             0,
@@ -556,10 +524,6 @@ class MainWindow(QMainWindow):
 
         state = item.checkState(0)
 
-        # ==================================================
-        # PLACEHOLDER
-        # ==================================================
-
         if item_type == "placeholder":
             return
 
@@ -573,16 +537,6 @@ class MainWindow(QMainWindow):
                 0,
                 Qt.UserRole + 2,
             )
-
-            # --------------------------------
-            # Si todavía no se expandió,
-            # no hay canciones que seleccionar.
-            #
-            # Importante:
-            # NO hacemos request aquí.
-            # El request solamente ocurre
-            # al abrir la flecha.
-            # --------------------------------
 
             if not loaded:
 
@@ -602,17 +556,8 @@ class MainWindow(QMainWindow):
 
                 return
 
-            # --------------------------------
-            # Estado parcial
-            # --------------------------------
-
             if state == Qt.PartiallyChecked:
                 return
-
-            # --------------------------------
-            # Propagar estado
-            # a las canciones
-            # --------------------------------
 
             blocker = QSignalBlocker(
                 self.results_tree
@@ -666,10 +611,6 @@ class MainWindow(QMainWindow):
 
                 checked_children += 1
 
-        # --------------------------------
-        # Determinar estado del álbum
-        # --------------------------------
-
         if (
             checked_children
             == total_children
@@ -686,11 +627,6 @@ class MainWindow(QMainWindow):
             parent_state = (
                 Qt.PartiallyChecked
             )
-
-        # --------------------------------
-        # Cambiar álbum sin disparar
-        # nuevamente el evento
-        # --------------------------------
 
         blocker = QSignalBlocker(
             self.results_tree
@@ -836,7 +772,7 @@ class MainWindow(QMainWindow):
             # --------------------------------
 
             result = (
-                self.youtube_music
+                self.ytmusic
                 .search_song(
                     artist=song["artist"],
                     title=song["title"],
@@ -911,10 +847,6 @@ class MainWindow(QMainWindow):
 
                 print(error)
 
-        # --------------------------------
-        # TERMINADO
-        # --------------------------------
-
         self.download_button.setEnabled(
             True
         )
@@ -930,3 +862,4 @@ class MainWindow(QMainWindow):
         self.status_label.setText(
             "Descargas terminadas."
         )
+

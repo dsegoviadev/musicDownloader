@@ -1,3 +1,4 @@
+
 import time
 
 import requests
@@ -11,14 +12,11 @@ HEADERS = {
 
 
 def _request(url, params):
-    """
-    Hace una petición a MusicBrainz.
-    Reintenta automáticamente si el servidor está ocupado.
-    """
 
     for intento in range(3):
 
         try:
+
             response = requests.get(
                 url,
                 params=params,
@@ -29,19 +27,11 @@ def _request(url, params):
             print(response.url)
             print(response.status_code)
 
-            # -----------------------------
-            # ÉXITO
-            # -----------------------------
-
             if response.status_code == 200:
 
                 time.sleep(1)
 
                 return response.json()
-
-            # -----------------------------
-            # SERVIDOR OCUPADO
-            # -----------------------------
 
             if response.status_code in (
                 429,
@@ -60,10 +50,6 @@ def _request(url, params):
                 time.sleep(espera)
 
                 continue
-
-            # -----------------------------
-            # OTRO ERROR
-            # -----------------------------
 
             print("Error de MusicBrainz:")
             print(response.text)
@@ -96,27 +82,6 @@ def _request(url, params):
 # ============================================================
 
 def search_artist(artist_name):
-    """
-    Busca un artista y devuelve únicamente sus álbumes.
-
-    Las canciones NO se cargan aquí.
-
-    Retorna:
-
-    {
-        "artist": "Mayhem",
-        "albums": [
-            {
-                "name": "De Mysteriis Dom Sathanas",
-                "release_group_mbid": "..."
-            }
-        ]
-    }
-    """
-
-    # -----------------------------
-    # BUSCAR ARTISTA
-    # -----------------------------
 
     url = f"{BASE_URL}/artist"
 
@@ -126,9 +91,13 @@ def search_artist(artist_name):
         "limit": 5,
     }
 
-    result = _request(url, params)
+    result = _request(
+        url,
+        params
+    )
 
     if not result:
+
         return {
             "artist": artist_name,
             "albums": [],
@@ -140,13 +109,11 @@ def search_artist(artist_name):
     )
 
     if not artists:
+
         return {
             "artist": artist_name,
             "albums": [],
         }
-
-    # MusicBrainz coloca normalmente
-    # el resultado más relevante primero.
 
     artist = artists[0]
 
@@ -159,10 +126,6 @@ def search_artist(artist_name):
 
     print("MBID:")
     print(artist_mbid)
-
-    # -----------------------------
-    # OBTENER RELEASE GROUPS
-    # -----------------------------
 
     release_groups_result = (
         get_artist_albums(
@@ -186,16 +149,33 @@ def search_artist(artist_name):
 
     albums = []
 
-    # ========================================================
-    # FILTRAR ÁLBUMES
-    # ========================================================
+    blocked_secondary_types = {
+        "live",
+        "compilation",
+        "demo",
+        "remix",
+        "dj-mix",
+        "mixtape",
+        "soundtrack",
+        "spokenword",
+    }
+
+    blocked_terms = [
+        "live",
+        "concert",
+        "bootleg",
+        "compilation",
+        "greatest hits",
+        "best of",
+        "remix",
+        "remixes",
+        "demo",
+    ]
 
     for release_group in release_groups:
 
-        primary_type = (
-            release_group.get(
-                "primary-type"
-            )
+        primary_type = release_group.get(
+            "primary-type"
         )
 
         secondary_types = [
@@ -215,49 +195,14 @@ def search_artist(artist_name):
             album_name.lower()
         )
 
-        # -----------------------------
-        # SOLO ALBUM
-        # -----------------------------
-
         if primary_type != "Album":
             continue
-
-        # -----------------------------
-        # TIPOS EXCLUIDOS
-        # -----------------------------
-
-        blocked_secondary_types = {
-            "live",
-            "compilation",
-            "demo",
-            "remix",
-            "dj-mix",
-            "mixtape",
-            "soundtrack",
-            "spokenword",
-        }
 
         if any(
             value in blocked_secondary_types
             for value in secondary_types
         ):
             continue
-
-        # -----------------------------
-        # EXCLUIR POR NOMBRE
-        # -----------------------------
-
-        blocked_terms = [
-            "live",
-            "concert",
-            "bootleg",
-            "compilation",
-            "greatest hits",
-            "best of",
-            "remix",
-            "remixes",
-            "demo",
-        ]
 
         if any(
             term in album_name_lower
@@ -290,7 +235,9 @@ def search_artist(artist_name):
 # OBTENER ÁLBUMES DEL ARTISTA
 # ============================================================
 
-def get_artist_albums(artist_mbid):
+def get_artist_albums(
+    artist_mbid
+):
 
     url = f"{BASE_URL}/release-group"
 
@@ -359,11 +306,6 @@ def get_release_tracks(
 def get_album_tracks(
     release_group_mbid
 ):
-    """
-    Obtiene las canciones de un álbum
-    haciendo requests únicamente cuando
-    el álbum es solicitado.
-    """
 
     releases_result = (
         get_release_group_releases(
@@ -384,17 +326,9 @@ def get_album_tracks(
     if not releases:
         return []
 
-    # --------------------------------
-    # Elegir un release
-    # --------------------------------
-
     release = releases[0]
 
     release_mbid = release["id"]
-
-    # --------------------------------
-    # Obtener tracks
-    # --------------------------------
 
     tracks_result = get_release_tracks(
         release_mbid
@@ -425,3 +359,4 @@ def get_album_tracks(
                 songs.append(title)
 
     return songs
+

@@ -1,8 +1,14 @@
 from pathlib import Path
 
 import yt_dlp
+
 from mutagen.flac import FLAC, Picture
-from mutagen.id3 import APIC, TALB, TIT2, TPE1
+from mutagen.id3 import (
+    APIC,
+    TALB,
+    TIT2,
+    TPE1,
+)
 from mutagen.mp3 import MP3
 
 
@@ -21,6 +27,10 @@ class Downloader:
             exist_ok=True,
         )
 
+    # ==================================================
+    # DESCARGAR
+    # ==================================================
+
     def download(
         self,
         video_id,
@@ -30,19 +40,97 @@ class Downloader:
         format_name="mp3",
     ):
 
+        # ---------------------------------------------
+        # LIMPIAR DATOS
+        # ---------------------------------------------
+
+        artist = self._sanitize_filename(
+            artist
+        )
+
+        album = self._sanitize_filename(
+            album
+        )
+
+        title = self._sanitize_filename(
+            title
+        )
+
+        format_name = format_name.lower()
+
+        # ---------------------------------------------
+        # CARPETA:
+        #
+        # downloads/
+        # └── artista/
+        #     └── album/
+        #         └── canción.ext
+        # ---------------------------------------------
+
+        album_folder = (
+            self.output_folder
+            / artist
+            / album
+        )
+
+        album_folder.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        # ---------------------------------------------
+        # ARCHIVO FINAL
+        # ---------------------------------------------
+
+        file_path = (
+            album_folder
+            / f"{title}.{format_name}"
+        )
+
+        # ---------------------------------------------
+        # EVITAR DESCARGAR DUPLICADOS
+        # ---------------------------------------------
+
+        if file_path.exists():
+
+            print()
+            print(
+                "La canción ya existe:"
+            )
+
+            print(
+                file_path
+            )
+
+            print(
+                "Saltando descarga."
+            )
+
+            return file_path
+
+        # ---------------------------------------------
+        # URL YOUTUBE MUSIC
+        # ---------------------------------------------
+
         url = (
             "https://music.youtube.com/watch"
             f"?v={video_id}"
         )
 
-        extension = format_name.lower()
+        # ---------------------------------------------
+        # TEMPLATE DE YT-DLP
+        # ---------------------------------------------
 
         output_template = str(
-            self.output_folder
-            / f"{artist} - {title}.%(ext)s"
+            album_folder
+            / f"{title}.%(ext)s"
         )
 
-        if extension == "mp3":
+        # ---------------------------------------------
+        # POSTPROCESSORS
+        # ---------------------------------------------
+
+        if format_name == "mp3":
 
             postprocessors = [
                 {
@@ -52,7 +140,7 @@ class Downloader:
                 }
             ]
 
-        elif extension == "flac":
+        elif format_name == "flac":
 
             postprocessors = [
                 {
@@ -62,20 +150,28 @@ class Downloader:
             ]
 
         else:
+
             raise ValueError(
                 f"Formato no soportado: "
                 f"{format_name}"
             )
 
+        # ---------------------------------------------
+        # OPCIONES YT-DLP
+        # ---------------------------------------------
+
         options = {
+
             "format": "bestaudio/best",
 
             "outtmpl": output_template,
 
             "postprocessors": postprocessors,
 
+            # Descargar portada
             "writethumbnail": True,
 
+            # No seguir playlists
             "noplaylist": True,
 
             "quiet": False,
@@ -83,20 +179,56 @@ class Downloader:
             "no_warnings": False,
         }
 
-        with yt_dlp.YoutubeDL(options) as ydl:
-            ydl.download([url])
+        # ---------------------------------------------
+        # DESCARGAR
+        # ---------------------------------------------
 
-        file_path = (
-            self.output_folder
-            / f"{artist} - {title}.{extension}"
+        print()
+        print(
+            "Descargando:"
         )
+
+        print(
+            f"{artist} - "
+            f"{title}"
+        )
+
+        print(
+            f"Álbum: {album}"
+        )
+
+        print(
+            f"Formato: "
+            f"{format_name.upper()}"
+        )
+
+        print(
+            f"Destino: "
+            f"{file_path}"
+        )
+
+        with yt_dlp.YoutubeDL(
+            options
+        ) as ydl:
+
+            ydl.download(
+                [url]
+            )
+
+        # ---------------------------------------------
+        # BUSCAR PORTADA
+        # ---------------------------------------------
 
         thumbnail_path = (
             self._find_thumbnail(
-                artist,
+                album_folder,
                 title,
             )
         )
+
+        # ---------------------------------------------
+        # METADATA
+        # ---------------------------------------------
 
         self._add_metadata(
             file_path=file_path,
@@ -104,26 +236,35 @@ class Downloader:
             title=title,
             artist=artist,
             album=album,
-            format_name=extension,
+            format_name=format_name,
         )
+
+        # ---------------------------------------------
+        # ELIMINAR PORTADA TEMPORAL
+        # ---------------------------------------------
 
         if (
             thumbnail_path
             and thumbnail_path.exists()
         ):
+
             thumbnail_path.unlink()
 
         return file_path
 
+    # ==================================================
+    # BUSCAR PORTADA
+    # ==================================================
+
     def _find_thumbnail(
         self,
-        artist,
+        album_folder,
         title,
     ):
 
         base_name = (
-            self.output_folder
-            / f"{artist} - {title}"
+            album_folder
+            / title
         )
 
         extensions = [
@@ -135,14 +276,21 @@ class Downloader:
 
         for extension in extensions:
 
-            path = base_name.with_suffix(
-                extension
+            path = (
+                base_name.with_suffix(
+                    extension
+                )
             )
 
             if path.exists():
+
                 return path
 
         return None
+
+    # ==================================================
+    # METADATA
+    # ==================================================
 
     def _add_metadata(
         self,
@@ -155,6 +303,7 @@ class Downloader:
     ):
 
         if not file_path.exists():
+
             raise FileNotFoundError(
                 f"No se encontró: "
                 f"{file_path}"
@@ -180,6 +329,10 @@ class Downloader:
                 album,
             )
 
+    # ==================================================
+    # MP3 METADATA
+    # ==================================================
+
     def _add_mp3_metadata(
         self,
         file_path,
@@ -189,10 +342,17 @@ class Downloader:
         album,
     ):
 
-        audio = MP3(file_path)
+        audio = MP3(
+            file_path
+        )
 
         if audio.tags is None:
+
             audio.add_tags()
+
+        # ---------------------------------------------
+        # TÍTULO
+        # ---------------------------------------------
 
         audio.tags.add(
             TIT2(
@@ -201,12 +361,20 @@ class Downloader:
             )
         )
 
+        # ---------------------------------------------
+        # ARTISTA
+        # ---------------------------------------------
+
         audio.tags.add(
             TPE1(
                 encoding=3,
                 text=artist,
             )
         )
+
+        # ---------------------------------------------
+        # ÁLBUM
+        # ---------------------------------------------
 
         audio.tags.add(
             TALB(
@@ -215,6 +383,10 @@ class Downloader:
             )
         )
 
+        # ---------------------------------------------
+        # PORTADA
+        # ---------------------------------------------
+
         if thumbnail_path:
 
             with open(
@@ -222,7 +394,9 @@ class Downloader:
                 "rb",
             ) as image:
 
-                image_data = image.read()
+                image_data = (
+                    image.read()
+                )
 
             audio.tags.add(
                 APIC(
@@ -238,6 +412,10 @@ class Downloader:
 
         audio.save()
 
+    # ==================================================
+    # FLAC METADATA
+    # ==================================================
+
     def _add_flac_metadata(
         self,
         file_path,
@@ -247,11 +425,23 @@ class Downloader:
         album,
     ):
 
-        audio = FLAC(file_path)
+        audio = FLAC(
+            file_path
+        )
+
+        # ---------------------------------------------
+        # METADATA
+        # ---------------------------------------------
 
         audio["title"] = title
+
         audio["artist"] = artist
+
         audio["album"] = album
+
+        # ---------------------------------------------
+        # PORTADA
+        # ---------------------------------------------
 
         if thumbnail_path:
 
@@ -260,7 +450,9 @@ class Downloader:
                 "rb",
             ) as image:
 
-                image_data = image.read()
+                image_data = (
+                    image.read()
+                )
 
             picture = Picture()
 
@@ -276,6 +468,7 @@ class Downloader:
 
             picture.data = image_data
 
+            # Eliminar portadas anteriores
             audio.clear_pictures()
 
             audio.add_picture(
@@ -284,21 +477,58 @@ class Downloader:
 
         audio.save()
 
-    @staticmethod
-    def _get_mime_type(path):
+    # ==================================================
+    # MIME TYPE
+    # ==================================================
 
-        suffix = path.suffix.lower()
+    @staticmethod
+    def _get_mime_type(
+        path
+    ):
+
+        suffix = (
+            path.suffix.lower()
+        )
 
         if suffix in (
             ".jpg",
             ".jpeg",
         ):
+
             return "image/jpeg"
 
         if suffix == ".png":
+
             return "image/png"
 
         if suffix == ".webp":
+
             return "image/webp"
 
         return "image/jpeg"
+
+    # ==================================================
+    # SANITIZAR NOMBRES
+    # ==================================================
+
+    @staticmethod
+    def _sanitize_filename(
+        name
+    ):
+
+        if not name:
+            return "Unknown"
+
+        invalid_chars = (
+            '<>:"/\\|?*'
+        )
+
+        for char in invalid_chars:
+
+            name = name.replace(
+                char,
+                "_",
+            )
+
+        return name.strip()
+
