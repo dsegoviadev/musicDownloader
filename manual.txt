@@ -1,0 +1,1963 @@
+# Manual técnico de estudio — Music Downloader
+
+## 1. Objetivo de este manual
+
+Este documento explica el funcionamiento interno de la aplicación `musicDownloader` que estamos construyendo.
+
+La finalidad no es solamente saber "qué hace cada archivo", sino entender **por qué está hecho así**, cómo se comunican las partes y qué conceptos de Python intervienen.
+
+Al terminar deberías poder:
+
+* Leer la estructura completa del proyecto.
+* Entender el flujo de una búsqueda.
+* Entender cómo se comunican la interfaz y los servicios.
+* Trabajar con APIs HTTP.
+* Trabajar con respuestas JSON.
+* Entender clases y objetos.
+* Entender señales de PySide6.
+* Trabajar con `QTreeWidget`.
+* Manipular archivos y directorios con `pathlib`.
+* Utilizar `yt-dlp`.
+* Manipular metadata con Mutagen.
+* Entender excepciones y reintentos.
+* Modificar funcionalidades existentes sin depender de ChatGPT.
+
+---
+
+# 2. Arquitectura general
+
+La aplicación está dividida principalmente en tres capas:
+
+```text
+                    ┌─────────────────────┐
+                    │   main_window.py    │
+                    │       UI / Qt       │
+                    └──────────┬──────────┘
+                               │
+             ┌─────────────────┼─────────────────┐
+             │                 │                 │
+             ▼                 ▼                 ▼
+   ┌─────────────────┐ ┌───────────────┐ ┌────────────────┐
+   │ musicbrainz.py  │ │   ytmusic.py  │ │ downloader.py  │
+   │  Metadata / DB  │ │    Search     │ │    Download    │
+   └─────────────────┘ └───────────────┘ └────────────────┘
+             │                 │                 │
+             ▼                 ▼                 ▼
+       MusicBrainz        YouTube Music        yt-dlp
+```
+
+La idea importante es:
+
+> `main_window.py` coordina. Los servicios hacen el trabajo especializado.
+
+La interfaz no debería saber cómo hacer una petición HTTP a MusicBrainz ni cómo incrustar una portada en un MP3.
+
+---
+
+# 3. Estructura del proyecto
+
+La estructura que estamos manejando es aproximadamente:
+
+```text
+musicDownload/
+│
+├── app.py
+├── test_downloader.py
+├── test_mb.py
+├── requirements.txt
+│
+├── services/
+│   ├── musicbrainz.py
+│   ├── ytmusic.py
+│   └── downloader.py
+│
+├── ui/
+│   └── main_window.py
+│
+├── downloads/
+│   └── Artista/
+│       └── Álbum/
+│           └── Cancion.mp3
+│
+└── .venv/
+```
+
+---
+
+# 4. Flujo completo de la aplicación
+
+Cuando el usuario escribe:
+
+```text
+Mayhem
+```
+
+y presiona:
+
+```text
+Buscar
+```
+
+ocurre aproximadamente esto:
+
+```text
+Usuario
+   │
+   ▼
+main_window.py
+   │
+   │ fetch_artist("Mayhem")
+   ▼
+musicbrainz.py
+   │
+   │ HTTP request
+   ▼
+MusicBrainz
+   │
+   │ JSON
+   ▼
+musicbrainz.py
+   │
+   │ albums
+   ▼
+main_window.py
+   │
+   ▼
+QTreeWidget
+```
+
+Todavía **no se buscan canciones**.
+
+Cuando el usuario abre:
+
+```text
+De Mysteriis Dom Sathanas
+```
+
+entonces:
+
+```text
+Usuario expande álbum
+        │
+        ▼
+handle_item_expanded()
+        │
+        ▼
+load_album_songs()
+        │
+        ▼
+get_album_tracks()
+        │
+        ▼
+MusicBrainz
+        │
+        ▼
+canciones
+        │
+        ▼
+QTreeWidget
+```
+
+Después el usuario selecciona:
+
+```text
+Freezing Moon
+```
+
+y presiona:
+
+```text
+Descargar seleccionadas
+```
+
+El flujo cambia:
+
+```text
+main_window.py
+      │
+      ▼
+YouTubeMusic.search_song()
+      │
+      ▼
+YouTube Music
+      │
+      ▼
+resultado
+      │
+      ▼
+Downloader.download()
+      │
+      ▼
+yt-dlp
+      │
+      ▼
+archivo de audio
+      │
+      ▼
+Mutagen
+      │
+      ├── título
+      ├── artista
+      ├── álbum
+      └── portada
+      │
+      ▼
+downloads/
+  Artista/
+    Álbum/
+      Cancion.mp3
+```
+
+---
+
+# 5. ¿Por qué usamos MusicBrainz?
+
+Una de las decisiones más importantes del proyecto fue separar:
+
+```text
+METADATA
+```
+
+de:
+
+```text
+FUENTE DE AUDIO
+```
+
+MusicBrainz nos sirve principalmente para saber:
+
+* qué artista es;
+* qué álbumes tiene;
+* qué tipo de release es;
+* qué canciones pertenecen a un release;
+* identificadores MBID.
+
+YouTube Music se utiliza para encontrar el audio.
+
+Por lo tanto:
+
+```text
+MusicBrainz
+     =
+"¿Qué canción debería buscar?"
+
+YouTube Music
+     =
+"¿Dónde encuentro el audio?"
+
+yt-dlp
+     =
+"Descarga el audio."
+
+Mutagen
+     =
+"Escribe la información dentro del archivo."
+```
+
+Esta separación es fundamental.
+
+---
+
+# 6. `services/musicbrainz.py`
+
+Este módulo se encarga de comunicarse con MusicBrainz.
+
+## 6.1 `_request()`
+
+La función:
+
+```python
+def _request(url, params):
+```
+
+centraliza las peticiones HTTP.
+
+Esto evita repetir constantemente:
+
+```python
+requests.get(...)
+```
+
+en todas las funciones.
+
+La función recibe:
+
+```text
+url
+params
+```
+
+y devuelve:
+
+```python
+response.json()
+```
+
+si todo sale correctamente.
+
+---
+
+# 7. Reintentos
+
+Una parte importante es:
+
+```python
+for intento in range(3):
+```
+
+Esto significa que intentamos la petición hasta tres veces.
+
+Después tenemos:
+
+```python
+if response.status_code in (
+    429,
+    502,
+    503,
+    504,
+):
+```
+
+Estos códigos representan situaciones donde tiene sentido intentar nuevamente.
+
+El tiempo de espera utiliza:
+
+```python
+espera = 2 ** intento
+```
+
+Por lo tanto:
+
+```text
+intento 0 → 1 segundo
+intento 1 → 2 segundos
+intento 2 → 4 segundos
+```
+
+Esto se conoce como **exponential backoff**.
+
+---
+
+# 8. `search_artist()`
+
+La función:
+
+```python
+search_artist(
+    artist_name,
+    include_types=None,
+)
+```
+
+hace dos cosas principales:
+
+### Paso 1
+
+Busca el artista.
+
+```text
+Mayhem
+```
+
+MusicBrainz devuelve varios resultados.
+
+Nosotros tomamos:
+
+```python
+artist = artists[0]
+```
+
+y obtenemos:
+
+```python
+artist_mbid = artist["id"]
+artist_name = artist["name"]
+```
+
+Esto es importante porque el nombre que introdujo el usuario puede no ser exactamente el nombre oficial utilizado por MusicBrainz.
+
+---
+
+# 9. ¿Por qué usamos el nombre de MusicBrainz?
+
+Ejemplo:
+
+```text
+Usuario escribe:
+
+Limp Bizkit
+```
+
+MusicBrainz puede devolver:
+
+```text
+Limp Bizkit
+```
+
+pero el usuario podría haber escrito algo diferente.
+
+La aplicación utiliza:
+
+```python
+artist_name = artist["name"]
+```
+
+para continuar utilizando el nombre oficial.
+
+Esto mejora la búsqueda posterior en YouTube Music.
+
+---
+
+# 10. Release Groups
+
+MusicBrainz utiliza el concepto:
+
+```text
+release-group
+```
+
+Un release group representa conceptualmente una obra publicada.
+
+Por ejemplo:
+
+```text
+De Mysteriis Dom Sathanas
+```
+
+puede tener distintas ediciones/releases.
+
+La aplicación primero busca los release groups.
+
+No pide inmediatamente todas las canciones.
+
+Esto fue una decisión importante para evitar hacer demasiados requests.
+
+---
+
+# 11. Carga diferida de canciones
+
+La interfaz muestra:
+
+```text
+▸ De Mysteriis Dom Sathanas
+▸ Deathcrush
+▸ Live...
+```
+
+pero las canciones todavía no han sido solicitadas.
+
+Cuando el usuario abre:
+
+```text
+▾ De Mysteriis Dom Sathanas
+```
+
+se hace el request.
+
+Esto se llama:
+
+> Lazy loading / carga diferida.
+
+La idea es:
+
+```text
+Buscar artista
+      ↓
+solo álbumes
+
+Expandir álbum
+      ↓
+canciones de ese álbum
+```
+
+En lugar de:
+
+```text
+Buscar artista
+      ↓
+TODOS los álbumes
+      ↓
+TODAS las canciones
+      ↓
+muchísimos requests
+```
+
+---
+
+# 12. Tipos de release
+
+La interfaz actualmente permite:
+
+```text
+☑ Álbumes
+☐ Singles
+☐ EPs
+☐ Lives
+```
+
+Esto termina llegando a:
+
+```python
+include_types
+```
+
+Por ejemplo:
+
+```python
+[
+    "album",
+    "single",
+]
+```
+
+MusicBrainz entonces filtra según:
+
+```python
+primary_type
+```
+
+y:
+
+```python
+secondary_types
+```
+
+---
+
+# 13. Diferencia entre primary-type y secondary-types
+
+Ejemplo conceptual:
+
+```json
+{
+    "primary-type": "Album",
+    "secondary-types": [
+        "Live"
+    ]
+}
+```
+
+El release puede ser un álbum pero además ser un live.
+
+Por eso tenemos que revisar ambos campos.
+
+Esto nos permite excluir:
+
+```text
+Compilation
+Demo
+Remix
+Live
+```
+
+cuando no queremos esos contenidos.
+
+---
+
+# 14. `get_album_tracks()`
+
+Esta función recibe:
+
+```python
+release_group_mbid
+```
+
+Primero obtiene los releases:
+
+```python
+get_release_group_releases()
+```
+
+Después toma un release:
+
+```python
+release = releases[0]
+```
+
+y obtiene su MBID:
+
+```python
+release_mbid = release["id"]
+```
+
+Finalmente:
+
+```python
+get_release_tracks(
+    release_mbid
+)
+```
+
+obtiene las canciones.
+
+El resultado final es una lista:
+
+```python
+[
+    "Funeral Fog",
+    "Freezing Moon",
+    "Cursed in Eternity",
+    ...
+]
+```
+
+---
+
+# 15. `services/ytmusic.py`
+
+Este módulo tiene una sola responsabilidad principal:
+
+> Encontrar una canción en YouTube Music.
+
+La clase:
+
+```python
+class YouTubeMusic:
+```
+
+crea:
+
+```python
+self.ytmusic = YTMusic()
+```
+
+---
+
+# 16. Buscar una canción
+
+La búsqueda utiliza:
+
+```python
+query = f"{artist} - {title}"
+```
+
+Ejemplo:
+
+```text
+Mayhem - Freezing Moon
+```
+
+Después:
+
+```python
+self.ytmusic.search(
+    query,
+    filter="songs",
+)
+```
+
+Esto devuelve varios resultados.
+
+---
+
+# 17. ¿Por qué no tomamos el primer resultado?
+
+Porque el primer resultado puede ser:
+
+```text
+Freezing Moon - Live
+```
+
+o:
+
+```text
+Freezing Moon Cover
+```
+
+o incluso:
+
+```text
+Freezing Moon - otra banda
+```
+
+Por eso tenemos filtros.
+
+---
+
+# 18. Filtro de artista
+
+Se extraen los nombres:
+
+```python
+artist_names = [
+    item.get("name", "")
+    for item in result_artists
+]
+```
+
+Después comprobamos si corresponde al artista buscado.
+
+---
+
+# 19. Filtro de Live
+
+Se construye:
+
+```python
+text_to_check = (
+    f"{result_title} "
+    f"{result_album_name}"
+).lower()
+```
+
+Después buscamos términos como:
+
+```text
+live
+concert
+festival
+performance
+bootleg
+```
+
+Esto permite evitar versiones en vivo.
+
+---
+
+# 20. Filtro de covers
+
+También tenemos:
+
+```text
+cover
+tribute
+```
+
+para evitar resultados que no sean la grabación original.
+
+---
+
+# 21. Selección del mejor resultado
+
+La función:
+
+```python
+_select_best_result()
+```
+
+asigna puntos.
+
+Ejemplo conceptual:
+
+```text
+Título exacto       +100
+Artista exacto      +100
+Álbum exacto        +150
+```
+
+Por lo tanto, si tenemos:
+
+```text
+Freezing Moon
+Mayhem
+De Mysteriis Dom Sathanas
+```
+
+es mucho mejor candidato que:
+
+```text
+Freezing Moon
+Mayhem
+Live in Leipzig
+```
+
+---
+
+# 22. `services/downloader.py`
+
+Este es el módulo que finalmente crea el archivo.
+
+Utiliza:
+
+```python
+yt_dlp
+```
+
+y:
+
+```python
+mutagen
+```
+
+La responsabilidad está dividida:
+
+```text
+yt-dlp
+  ↓
+descarga
+
+Mutagen
+  ↓
+metadata + portada
+```
+
+---
+
+# 23. Estructura de carpetas
+
+El downloader construye:
+
+```python
+album_folder = (
+    self.output_folder
+    / self._sanitize_name(artist)
+    / self._sanitize_name(album)
+)
+```
+
+Esto genera:
+
+```text
+downloads/
+└── Mayhem/
+    └── De Mysteriis Dom Sathanas/
+        ├── Funeral Fog.mp3
+        ├── Freezing Moon.mp3
+        └── Cursed in Eternity.mp3
+```
+
+Esta estructura será importante para futuras funcionalidades.
+
+---
+
+# 24. `pathlib.Path`
+
+En lugar de concatenar strings:
+
+```python
+"downloads/" + artist + "/" + album
+```
+
+utilizamos:
+
+```python
+Path(...)
+```
+
+y:
+
+```python
+/
+```
+
+para unir rutas.
+
+Ejemplo:
+
+```python
+folder / artist / album
+```
+
+Esto hace que el código sea más limpio y portable.
+
+---
+
+# 25. Sanitización
+
+Los nombres de archivos pueden contener caracteres problemáticos:
+
+```text
+/
+\
+:
+*
+?
+"
+<
+>
+|
+```
+
+Por eso existe:
+
+```python
+_sanitize_name()
+```
+
+que los reemplaza por:
+
+```text
+_
+```
+
+Por ejemplo:
+
+```text
+Album: Live: 1990/1991
+```
+
+podría terminar como:
+
+```text
+Live_ 1990_1991
+```
+
+---
+
+# 26. MP3 vs FLAC
+
+El selector de la interfaz devuelve:
+
+```python
+"mp3"
+```
+
+o:
+
+```python
+"flac"
+```
+
+Después el downloader decide qué postprocessor utilizar.
+
+MP3:
+
+```python
+"preferredcodec": "mp3"
+"preferredquality": "320"
+```
+
+FLAC:
+
+```python
+"preferredcodec": "flac"
+```
+
+---
+
+# 27. Portadas
+
+Durante la descarga:
+
+```python
+"writethumbnail": True
+```
+
+le indica a `yt-dlp` que descargue también la imagen.
+
+Después buscamos:
+
+```text
+.jpg
+.jpeg
+.png
+.webp
+```
+
+La portada se inserta dentro del archivo mediante Mutagen.
+
+---
+
+# 28. Metadata MP3
+
+Para MP3 utilizamos:
+
+```python
+TIT2
+TPE1
+TALB
+APIC
+```
+
+Conceptualmente:
+
+```text
+TIT2 → título
+TPE1 → artista
+TALB → álbum
+APIC → portada
+```
+
+---
+
+# 29. Metadata FLAC
+
+Para FLAC utilizamos:
+
+```python
+audio["title"]
+audio["artist"]
+audio["album"]
+```
+
+y:
+
+```python
+Picture()
+```
+
+para la portada.
+
+---
+
+# 30. Limpieza de WebP
+
+Una decisión importante es que **no eliminamos el `.webp` inmediatamente**.
+
+Primero terminamos todas las descargas.
+
+Después:
+
+```python
+cleanup_webp()
+```
+
+busca:
+
+```python
+self.output_folder.rglob("*.webp")
+```
+
+Esto significa:
+
+> Buscar recursivamente todos los `.webp` dentro de `downloads`.
+
+Después:
+
+```python
+path.unlink()
+```
+
+los elimina.
+
+---
+
+# 31. `ui/main_window.py`
+
+Este es el cerebro de la interfaz.
+
+No realiza directamente:
+
+```text
+requests.get()
+yt_dlp.YoutubeDL()
+MP3()
+FLAC()
+```
+
+En lugar de eso utiliza los servicios.
+
+Por ejemplo:
+
+```python
+fetch_artist()
+```
+
+```python
+self.youtube_music.search_song()
+```
+
+```python
+self.downloader.download()
+```
+
+Esto es una forma básica de **separación de responsabilidades**.
+
+---
+
+# 32. PySide6 y señales
+
+Una parte fundamental de Qt es el sistema de señales.
+
+Tenemos:
+
+```python
+self.search_button.clicked.connect(
+    self.search_artist
+)
+```
+
+Esto significa:
+
+```text
+Usuario hace click
+        ↓
+clicked
+        ↓
+search_artist()
+```
+
+Otro ejemplo:
+
+```python
+self.results_tree.itemExpanded.connect(
+    self.handle_item_expanded
+)
+```
+
+Significa:
+
+```text
+Usuario expande árbol
+        ↓
+itemExpanded
+        ↓
+handle_item_expanded()
+```
+
+---
+
+# 33. `QTreeWidget`
+
+La estructura visual es:
+
+```text
+Álbum
+├── canción
+├── canción
+└── canción
+```
+
+Cada nodo es:
+
+```python
+QTreeWidgetItem
+```
+
+Tenemos dos tipos principales:
+
+```text
+album
+song
+```
+
+y temporalmente:
+
+```text
+placeholder
+```
+
+---
+
+# 34. `Qt.UserRole`
+
+Usamos:
+
+```python
+item.setData(
+    0,
+    Qt.UserRole,
+    "album",
+)
+```
+
+Esto permite guardar información invisible para el usuario.
+
+Por ejemplo:
+
+```text
+UserRole
+    ↓
+"album"
+```
+
+y:
+
+```text
+UserRole + 1
+    ↓
+MBID
+```
+
+y:
+
+```text
+UserRole + 2
+    ↓
+True / False
+```
+
+Esto es muy importante en interfaces gráficas:
+
+> El texto visible no tiene que contener toda la información necesaria para trabajar con el objeto.
+
+---
+
+# 35. Estado de carga
+
+Cada álbum guarda:
+
+```python
+Qt.UserRole + 2
+```
+
+como:
+
+```text
+False
+```
+
+cuando todavía no tiene canciones.
+
+Después del request:
+
+```text
+True
+```
+
+Esto evita volver a hacer la petición si el usuario:
+
+```text
+abre
+cierra
+abre
+cierra
+```
+
+el mismo álbum.
+
+---
+
+# 36. Placeholder
+
+Cuando creamos un álbum todavía no tiene canciones.
+
+Pero queremos que Qt muestre la flecha.
+
+Por eso agregamos:
+
+```text
+Cargando canciones...
+```
+
+como hijo temporal.
+
+Cuando el álbum se expande:
+
+```python
+while album.childCount() > 0:
+```
+
+el placeholder se elimina.
+
+Después aparecen las canciones reales.
+
+---
+
+# 37. `QSignalBlocker`
+
+Esta clase aparece varias veces:
+
+```python
+blocker = QSignalBlocker(
+    self.results_tree
+)
+```
+
+Su objetivo es evitar que cambiar un checkbox dispare otro evento.
+
+Ejemplo:
+
+```text
+Seleccionar álbum
+      ↓
+marcar 10 canciones
+      ↓
+10 eventos itemChanged
+```
+
+No queremos eso.
+
+Por eso bloqueamos temporalmente las señales.
+
+---
+
+# 38. Checkbox del álbum
+
+Si tenemos:
+
+```text
+☐ Álbum
+```
+
+y sus canciones:
+
+```text
+☐ Song 1
+☐ Song 2
+☐ Song 3
+```
+
+si seleccionamos el álbum:
+
+```text
+☑ Álbum
+├── ☑ Song 1
+├── ☑ Song 2
+└── ☑ Song 3
+```
+
+Si seleccionamos solo una:
+
+```text
+◩ Álbum
+├── ☑ Song 1
+├── ☐ Song 2
+└── ☐ Song 3
+```
+
+Ese estado:
+
+```python
+Qt.PartiallyChecked
+```
+
+es el estado parcial.
+
+---
+
+# 39. Flujo de descarga
+
+La función principal es:
+
+```python
+download_selected_songs()
+```
+
+Primero obtiene:
+
+```python
+songs = self.get_selected_songs()
+```
+
+Después obtiene:
+
+```python
+format_name = (
+    self.format_selector.currentData()
+)
+```
+
+Por ejemplo:
+
+```text
+mp3
+```
+
+Después procesa cada canción:
+
+```python
+for index, song in enumerate(
+    songs,
+    start=1,
+):
+```
+
+---
+
+# 40. Para cada canción
+
+Cada canción pasa por:
+
+```text
+MusicBrainz
+    ↓
+metadata conocida
+
+YouTube Music
+    ↓
+video_id
+
+yt-dlp
+    ↓
+audio
+
+Mutagen
+    ↓
+metadata + portada
+
+filesystem
+    ↓
+archivo final
+```
+
+---
+
+# 41. Manejo de errores
+
+Hay varios:
+
+```python
+try:
+    ...
+except Exception as error:
+    ...
+```
+
+Esto evita que una canción problemática necesariamente destruya todo el proceso.
+
+Por ejemplo:
+
+```text
+Song 1 → OK
+Song 2 → error
+Song 3 → OK
+```
+
+Idealmente:
+
+```text
+Song 1 descargada
+Song 2 falló
+Song 3 descargada
+```
+
+---
+
+# 42. Conceptos de Python que debes dominar para entender esta aplicación
+
+Este proyecto es bastante bueno para estudiar Python porque toca muchos conceptos reales.
+
+## Nivel 1 — Fundamental
+
+Debes dominar:
+
+```text
+variables
+strings
+listas
+diccionarios
+tuplas
+if
+for
+while
+funciones
+return
+```
+
+---
+
+## Nivel 2 — Intermedio
+
+Después:
+
+```text
+clases
+objetos
+self
+métodos
+imports
+módulos
+excepciones
+try/except
+```
+
+---
+
+## Nivel 3 — Python práctico
+
+Después:
+
+```text
+pathlib
+requests
+JSON
+list comprehensions
+f-strings
+type hints
+context managers
+```
+
+---
+
+## Nivel 4 — Aplicaciones reales
+
+Finalmente:
+
+```text
+PySide6
+signals / slots
+APIs REST
+HTTP status codes
+filesystem
+subprocesses
+metadata
+external libraries
+```
+
+---
+
+# 43. Ejercicios recomendados
+
+No intentes hacerlos todos de golpe.
+
+## Ejercicio 1
+
+Explica sin mirar el código:
+
+```python
+def search_artist(artist_name):
+```
+
+¿Qué recibe?
+
+¿Qué devuelve?
+
+¿Qué API utiliza?
+
+---
+
+## Ejercicio 2
+
+Busca dónde se decide el nombre del artista utilizado para YouTube Music.
+
+---
+
+## Ejercicio 3
+
+Modifica el texto:
+
+```text
+Cargando canciones...
+```
+
+por:
+
+```text
+Obteniendo canciones...
+```
+
+---
+
+## Ejercicio 4
+
+Agrega un mensaje:
+
+```text
+X canciones encontradas
+```
+
+cuando se expande un álbum.
+
+---
+
+## Ejercicio 5
+
+Haz que los álbumes aparezcan ordenados alfabéticamente.
+
+Pista:
+
+```python
+sorted()
+```
+
+---
+
+## Ejercicio 6
+
+Agrega otro formato de audio.
+
+Primero analiza:
+
+```python
+format_selector
+```
+
+y después:
+
+```python
+Downloader.download()
+```
+
+---
+
+## Ejercicio 7
+
+Haz que la aplicación muestre:
+
+```text
+Descargando 3/12
+```
+
+en una barra de progreso.
+
+---
+
+## Ejercicio 8
+
+Haz que la aplicación no intente descargar una canción que ya existe.
+
+La pregunta importante es:
+
+> ¿En qué lugar del flujo debería comprobarse?
+
+No copies código todavía.
+
+Primero decide la arquitectura.
+
+---
+
+# 44. Ejercicio de debugging
+
+Provoca deliberadamente:
+
+```python
+result["algo_que_no_existe"]
+```
+
+y observa:
+
+```text
+KeyError
+```
+
+Después prueba:
+
+```python
+result.get("algo_que_no_existe")
+```
+
+y observa la diferencia.
+
+Este ejercicio es especialmente importante porque las APIs devuelven diccionarios grandes y no siempre todos los campos existen.
+
+---
+
+# 45. Ejercicio de API
+
+Ejecuta:
+
+```python
+result = search_artist("Mayhem")
+```
+
+Después imprime:
+
+```python
+print(type(result))
+```
+
+y:
+
+```python
+print(result.keys())
+```
+
+Después inspecciona:
+
+```python
+result["artist"]
+```
+
+y:
+
+```python
+result["albums"]
+```
+
+El objetivo es acostumbrarte a explorar estructuras JSON.
+
+---
+
+# 46. Ejercicio de clases
+
+Abre:
+
+```text
+services/downloader.py
+```
+
+y responde sin ejecutar nada:
+
+### ¿Qué es?
+
+```python
+Downloader
+```
+
+### ¿Qué es?
+
+```python
+self.output_folder
+```
+
+### ¿Qué hace?
+
+```python
+self._add_metadata()
+```
+
+### ¿Por qué lleva `_`?
+
+```python
+_find_thumbnail()
+_sanitize_name()
+```
+
+---
+
+# 47. Ejercicio de arquitectura
+
+Intenta responder:
+
+> ¿Por qué no ponemos todo el código de `Downloader` dentro de `MainWindow`?
+
+Respuesta esperada:
+
+Porque `MainWindow` debería encargarse de la interfaz y coordinación, mientras que `Downloader` se encarga de descargar y procesar archivos.
+
+Esto permite modificar una parte sin destruir las demás.
+
+---
+
+# 48. La regla de oro para continuar desarrollando
+
+Antes de agregar una funcionalidad nueva, pregunta:
+
+```text
+¿Quién debería encargarse de esto?
+```
+
+Por ejemplo:
+
+### Buscar información musical
+
+```text
+musicbrainz.py
+```
+
+### Buscar audio
+
+```text
+ytmusic.py
+```
+
+### Descargar
+
+```text
+downloader.py
+```
+
+### Mostrar botones
+
+```text
+main_window.py
+```
+
+Esto evita terminar con un:
+
+```text
+main_window.py
+```
+
+de 3000 líneas.
+
+---
+
+# 49. Cómo estudiar esta aplicación sin ChatGPT
+
+Te recomiendo este método.
+
+## Paso 1
+
+Abre:
+
+```text
+app.py
+```
+
+Entiende cómo arranca la aplicación.
+
+## Paso 2
+
+Ve a:
+
+```text
+ui/main_window.py
+```
+
+Identifica:
+
+```text
+__init__
+setup_ui
+search_artist
+handle_item_expanded
+load_album_songs
+handle_item_changed
+get_selected_songs
+download_selected_songs
+```
+
+## Paso 3
+
+Ve a:
+
+```text
+services/musicbrainz.py
+```
+
+Sigue el flujo:
+
+```text
+search_artist
+    ↓
+get_artist_albums
+    ↓
+get_release_group_releases
+    ↓
+get_release_tracks
+```
+
+## Paso 4
+
+Ve a:
+
+```text
+services/ytmusic.py
+```
+
+Entiende:
+
+```text
+search_song
+    ↓
+filtros
+    ↓
+_select_best_result
+```
+
+## Paso 5
+
+Finalmente:
+
+```text
+services/downloader.py
+```
+
+Sigue:
+
+```text
+download
+    ↓
+yt-dlp
+    ↓
+thumbnail
+    ↓
+metadata
+    ↓
+MP3 / FLAC
+```
+
+---
+
+# 50. Prueba final
+
+Cuando puedas responder estas preguntas sin mirar el código, ya tendrás una comprensión bastante sólida de la aplicación:
+
+1. ¿Qué función se ejecuta cuando presionamos Buscar?
+
+2. ¿Por qué MusicBrainz se consulta antes que YouTube Music?
+
+3. ¿Qué es un MBID?
+
+4. ¿Por qué no cargamos las canciones inmediatamente?
+
+5. ¿Qué provoca `itemExpanded`?
+
+6. ¿Qué diferencia hay entre `Qt.UserRole` y el texto visible del árbol?
+
+7. ¿Por qué utilizamos `QSignalBlocker`?
+
+8. ¿Cómo decide YouTube Music cuál resultado es mejor?
+
+9. ¿Qué función evita descargar covers y lives?
+
+10. ¿Qué hace `yt-dlp`?
+
+11. ¿Qué hace Mutagen?
+
+12. ¿Cómo se inserta la portada en un MP3?
+
+13. ¿Cómo se inserta la portada en FLAC?
+
+14. ¿Dónde se crea:
+
+```text
+artista/álbum/
+```
+
+15. ¿Dónde se eliminan los `.webp`?
+
+16. ¿Qué pasa si MusicBrainz devuelve HTTP 503?
+
+17. ¿Qué pasa si una canción no aparece en YouTube Music?
+
+18. ¿Por qué tenemos tres módulos separados?
+
+19. ¿Qué información viaja desde MusicBrainz hasta el Downloader?
+
+20. Si mañana quisiéramos agregar Spotify como fuente de búsqueda, ¿qué archivo debería cambiar primero?
+
+---
+
+# 51. El mapa mental de la aplicación
+
+Quédate con este esquema:
+
+```text
+                         USUARIO
+                            │
+                            ▼
+                    ┌───────────────┐
+                    │ MainWindow    │
+                    │   PySide6     │
+                    └───────┬───────┘
+                            │
+              ┌─────────────┴─────────────┐
+              │                           │
+              ▼                           ▼
+       ┌──────────────┐            ┌──────────────┐
+       │ MusicBrainz  │            │  YouTube     │
+       │              │            │   Music      │
+       └──────┬───────┘            └──────┬───────┘
+              │                           │
+              ▼                           ▼
+        Artista / Álbum             Video ID / Audio
+        Canciones
+              │                           │
+              └─────────────┬─────────────┘
+                            ▼
+                    ┌───────────────┐
+                    │   Downloader  │
+                    └───────┬───────┘
+                            │
+                     ┌──────┴──────┐
+                     ▼             ▼
+                   yt-dlp       Mutagen
+                     │             │
+                     ▼             ▼
+                   AUDIO       METADATA
+                                 +
+                               PORTADA
+                     │             │
+                     └──────┬──────┘
+                            ▼
+                     downloads/
+                       Artista/
+                         Álbum/
+                           canción
+```
+
+## 52. Próximo nivel
+
+La siguiente evolución natural de esta aplicación sería estudiar:
+
+```text
+1. Modelos de datos
+2. Separación UI / lógica
+3. Threads en PySide6
+4. Barra de progreso real
+5. Sistema de canciones ya descargadas
+6. Manejo de errores por canción
+7. Caché de MusicBrainz
+8. Mejor selección de resultados
+9. Metadata más completa
+10. Tests automatizados
+```
+
+Pero **no hace falta agregar todo ahora**.
+
+La versión actual ya tiene suficientes piezas reales para aprender muchísimo Python.
+
+La recomendación para la próxima sesión es abrir el proyecto y hacer algo diferente: **yo no te doy el código primero**. Te planteo una modificación pequeña y tú intentas encontrar por tu cuenta qué archivo, función y concepto necesitas tocar. Ahí es donde realmente vas a empezar a trabajar sin ChatGPT

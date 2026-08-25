@@ -2,14 +2,21 @@ from pathlib import Path
 
 import yt_dlp
 
-from mutagen.flac import FLAC, Picture
+from mutagen.flac import (
+    FLAC,
+    Picture,
+)
+
 from mutagen.id3 import (
     APIC,
     TALB,
     TIT2,
     TPE1,
 )
-from mutagen.mp3 import MP3
+
+from mutagen.mp3 import (
+    MP3,
+)
 
 
 class Downloader:
@@ -18,6 +25,7 @@ class Downloader:
         self,
         output_folder="downloads",
     ):
+
         self.output_folder = Path(
             output_folder
         )
@@ -40,37 +48,32 @@ class Downloader:
         format_name="mp3",
     ):
 
-        # ---------------------------------------------
-        # LIMPIAR DATOS
-        # ---------------------------------------------
-
-        artist = self._sanitize_filename(
-            artist
+        url = (
+            "https://music.youtube.com/watch"
+            f"?v={video_id}"
         )
 
-        album = self._sanitize_filename(
-            album
+        extension = (
+            format_name.lower()
         )
 
-        title = self._sanitize_filename(
-            title
-        )
-
-        format_name = format_name.lower()
-
-        # ---------------------------------------------
-        # CARPETA:
+        # --------------------------------
+        # ESTRUCTURA
         #
         # downloads/
-        # └── artista/
-        #     └── album/
-        #         └── canción.ext
-        # ---------------------------------------------
+        #   artista/
+        #       album/
+        #           canción
+        # --------------------------------
 
         album_folder = (
             self.output_folder
-            / artist
-            / album
+            / self._sanitize_name(
+                artist
+            )
+            / self._sanitize_name(
+                album
+            )
         )
 
         album_folder.mkdir(
@@ -78,74 +81,39 @@ class Downloader:
             exist_ok=True,
         )
 
-        # ---------------------------------------------
-        # ARCHIVO FINAL
-        # ---------------------------------------------
-
-        file_path = (
-            album_folder
-            / f"{title}.{format_name}"
-        )
-
-        # ---------------------------------------------
-        # EVITAR DESCARGAR DUPLICADOS
-        # ---------------------------------------------
-
-        if file_path.exists():
-
-            print()
-            print(
-                "La canción ya existe:"
-            )
-
-            print(
-                file_path
-            )
-
-            print(
-                "Saltando descarga."
-            )
-
-            return file_path
-
-        # ---------------------------------------------
-        # URL YOUTUBE MUSIC
-        # ---------------------------------------------
-
-        url = (
-            "https://music.youtube.com/watch"
-            f"?v={video_id}"
-        )
-
-        # ---------------------------------------------
-        # TEMPLATE DE YT-DLP
-        # ---------------------------------------------
-
         output_template = str(
             album_folder
-            / f"{title}.%(ext)s"
+            / f"{self._sanitize_name(title)}.%(ext)s"
         )
 
-        # ---------------------------------------------
+        # ==================================================
         # POSTPROCESSORS
-        # ---------------------------------------------
+        # ==================================================
 
-        if format_name == "mp3":
+        if extension == "mp3":
 
             postprocessors = [
                 {
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": "mp3",
-                    "preferredquality": "320",
+                    "key":
+                        "FFmpegExtractAudio",
+
+                    "preferredcodec":
+                        "mp3",
+
+                    "preferredquality":
+                        "320",
                 }
             ]
 
-        elif format_name == "flac":
+        elif extension == "flac":
 
             postprocessors = [
                 {
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": "flac",
+                    "key":
+                        "FFmpegExtractAudio",
+
+                    "preferredcodec":
+                        "flac",
                 }
             ]
 
@@ -156,56 +124,33 @@ class Downloader:
                 f"{format_name}"
             )
 
-        # ---------------------------------------------
-        # OPCIONES YT-DLP
-        # ---------------------------------------------
+        # ==================================================
+        # YT-DLP
+        # ==================================================
 
         options = {
 
-            "format": "bestaudio/best",
+            "format":
+                "bestaudio/best",
 
-            "outtmpl": output_template,
+            "outtmpl":
+                output_template,
 
-            "postprocessors": postprocessors,
+            "postprocessors":
+                postprocessors,
 
-            # Descargar portada
-            "writethumbnail": True,
+            "writethumbnail":
+                True,
 
-            # No seguir playlists
-            "noplaylist": True,
+            "noplaylist":
+                True,
 
-            "quiet": False,
+            "quiet":
+                False,
 
-            "no_warnings": False,
+            "no_warnings":
+                False,
         }
-
-        # ---------------------------------------------
-        # DESCARGAR
-        # ---------------------------------------------
-
-        print()
-        print(
-            "Descargando:"
-        )
-
-        print(
-            f"{artist} - "
-            f"{title}"
-        )
-
-        print(
-            f"Álbum: {album}"
-        )
-
-        print(
-            f"Formato: "
-            f"{format_name.upper()}"
-        )
-
-        print(
-            f"Destino: "
-            f"{file_path}"
-        )
 
         with yt_dlp.YoutubeDL(
             options
@@ -215,9 +160,18 @@ class Downloader:
                 [url]
             )
 
-        # ---------------------------------------------
-        # BUSCAR PORTADA
-        # ---------------------------------------------
+        # ==================================================
+        # ARCHIVO FINAL
+        # ==================================================
+
+        file_path = (
+            album_folder
+            / f"{self._sanitize_name(title)}.{extension}"
+        )
+
+        # ==================================================
+        # PORTADA
+        # ==================================================
 
         thumbnail_path = (
             self._find_thumbnail(
@@ -226,9 +180,9 @@ class Downloader:
             )
         )
 
-        # ---------------------------------------------
+        # ==================================================
         # METADATA
-        # ---------------------------------------------
+        # ==================================================
 
         self._add_metadata(
             file_path=file_path,
@@ -236,35 +190,33 @@ class Downloader:
             title=title,
             artist=artist,
             album=album,
-            format_name=format_name,
+            format_name=extension,
         )
 
-        # ---------------------------------------------
-        # ELIMINAR PORTADA TEMPORAL
-        # ---------------------------------------------
-
-        if (
-            thumbnail_path
-            and thumbnail_path.exists()
-        ):
-
-            thumbnail_path.unlink()
+        # --------------------------------
+        # No eliminamos aquí el WebP.
+        #
+        # La limpieza se hace al final
+        # del lote completo.
+        # --------------------------------
 
         return file_path
 
     # ==================================================
-    # BUSCAR PORTADA
+    # BUSCAR THUMBNAIL
     # ==================================================
 
     def _find_thumbnail(
         self,
-        album_folder,
+        folder,
         title,
     ):
 
         base_name = (
-            album_folder
-            / title
+            folder
+            / self._sanitize_name(
+                title
+            )
         )
 
         extensions = [
@@ -283,10 +235,50 @@ class Downloader:
             )
 
             if path.exists():
-
                 return path
 
         return None
+
+    # ==================================================
+    # LIMPIAR WEBP
+    # ==================================================
+
+    def cleanup_webp(self):
+        """
+        Elimina todos los archivos .webp
+        dentro de la carpeta de descargas.
+
+        Se llama al terminar todo el lote.
+        """
+
+        removed = 0
+
+        if not self.output_folder.exists():
+            return removed
+
+        for path in self.output_folder.rglob(
+            "*.webp"
+        ):
+
+            try:
+
+                path.unlink()
+
+                removed += 1
+
+                print(
+                    f"WebP eliminado: "
+                    f"{path}"
+                )
+
+            except OSError as error:
+
+                print(
+                    f"No se pudo eliminar "
+                    f"{path}: {error}"
+                )
+
+        return removed
 
     # ==================================================
     # METADATA
@@ -350,20 +342,12 @@ class Downloader:
 
             audio.add_tags()
 
-        # ---------------------------------------------
-        # TÍTULO
-        # ---------------------------------------------
-
         audio.tags.add(
             TIT2(
                 encoding=3,
                 text=title,
             )
         )
-
-        # ---------------------------------------------
-        # ARTISTA
-        # ---------------------------------------------
 
         audio.tags.add(
             TPE1(
@@ -372,20 +356,12 @@ class Downloader:
             )
         )
 
-        # ---------------------------------------------
-        # ÁLBUM
-        # ---------------------------------------------
-
         audio.tags.add(
             TALB(
                 encoding=3,
                 text=album,
             )
         )
-
-        # ---------------------------------------------
-        # PORTADA
-        # ---------------------------------------------
 
         if thumbnail_path:
 
@@ -429,19 +405,11 @@ class Downloader:
             file_path
         )
 
-        # ---------------------------------------------
-        # METADATA
-        # ---------------------------------------------
-
         audio["title"] = title
 
         audio["artist"] = artist
 
         audio["album"] = album
-
-        # ---------------------------------------------
-        # PORTADA
-        # ---------------------------------------------
 
         if thumbnail_path:
 
@@ -468,7 +436,6 @@ class Downloader:
 
             picture.data = image_data
 
-            # Eliminar portadas anteriores
             audio.clear_pictures()
 
             audio.add_picture(
@@ -512,23 +479,33 @@ class Downloader:
     # ==================================================
 
     @staticmethod
-    def _sanitize_filename(
+    def _sanitize_name(
         name
     ):
-
-        if not name:
-            return "Unknown"
+        """
+        Limpia caracteres que pueden
+        romper nombres de archivos/directorios.
+        """
 
         invalid_chars = (
             '<>:"/\\|?*'
         )
 
-        for char in invalid_chars:
+        cleaned = "".join(
+            "_"
+            if char in invalid_chars
+            else char
+            for char in name
+        )
 
-            name = name.replace(
-                char,
-                "_",
-            )
+        cleaned = (
+            cleaned
+            .strip()
+            .rstrip(".")
+        )
 
-        return name.strip()
-
+        return (
+            cleaned
+            if cleaned
+            else "Unknown"
+        )

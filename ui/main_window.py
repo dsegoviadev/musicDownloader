@@ -1,3 +1,6 @@
+
+from pathlib import Path
+
 from PySide6.QtCore import (
     QSignalBlocker,
     Qt,
@@ -5,6 +8,7 @@ from PySide6.QtCore import (
 
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QHBoxLayout,
     QLabel,
@@ -43,14 +47,14 @@ class MainWindow(QMainWindow):
 
         self.resize(
             900,
-            600,
+            650,
         )
 
         # -----------------------------
         # SERVICIOS
         # -----------------------------
 
-        self.ytmusic = (
+        self.youtube_music = (
             YouTubeMusic()
         )
 
@@ -59,6 +63,10 @@ class MainWindow(QMainWindow):
         )
 
         self.setup_ui()
+
+    # ==================================================
+    # UI
+    # ==================================================
 
     def setup_ui(self):
 
@@ -157,6 +165,78 @@ class MainWindow(QMainWindow):
         )
 
         # -----------------------------
+        # TIPOS DE RELEASE
+        # -----------------------------
+
+        release_type_label = QLabel(
+            "Incluir:"
+        )
+
+        main_layout.addWidget(
+            release_type_label
+        )
+
+        release_type_layout = QHBoxLayout()
+
+        self.album_checkbox = QCheckBox(
+            "Álbumes"
+        )
+
+        self.single_checkbox = QCheckBox(
+            "Singles"
+        )
+
+        self.ep_checkbox = QCheckBox(
+            "EPs"
+        )
+
+        self.live_checkbox = QCheckBox(
+            "Lives"
+        )
+
+        # -----------------------------
+        # DEFAULTS
+        # -----------------------------
+
+        self.album_checkbox.setChecked(
+            True
+        )
+
+        self.single_checkbox.setChecked(
+            False
+        )
+
+        self.ep_checkbox.setChecked(
+            False
+        )
+
+        self.live_checkbox.setChecked(
+            False
+        )
+
+        release_type_layout.addWidget(
+            self.album_checkbox
+        )
+
+        release_type_layout.addWidget(
+            self.single_checkbox
+        )
+
+        release_type_layout.addWidget(
+            self.ep_checkbox
+        )
+
+        release_type_layout.addWidget(
+            self.live_checkbox
+        )
+
+        release_type_layout.addStretch()
+
+        main_layout.addLayout(
+            release_type_layout
+        )
+
+        # -----------------------------
         # RESULTADOS
         # -----------------------------
 
@@ -225,6 +305,37 @@ class MainWindow(QMainWindow):
         if not artist:
             return
 
+        include_types = []
+
+        if self.album_checkbox.isChecked():
+            include_types.append(
+                "album"
+            )
+
+        if self.single_checkbox.isChecked():
+            include_types.append(
+                "single"
+            )
+
+        if self.ep_checkbox.isChecked():
+            include_types.append(
+                "ep"
+            )
+
+        if self.live_checkbox.isChecked():
+            include_types.append(
+                "live"
+            )
+
+        if not include_types:
+
+            self.status_label.setText(
+                "Selecciona al menos "
+                "un tipo de release."
+            )
+
+            return
+
         self.status_label.setText(
             "Cargando álbumes..."
         )
@@ -242,10 +353,24 @@ class MainWindow(QMainWindow):
         try:
 
             result = fetch_artist(
-                artist
+                artist,
+                include_types=include_types,
             )
 
             self.results_tree.clear()
+
+            # --------------------------------
+            # Guardamos el nombre real de
+            # MusicBrainz para usarlo después
+            # en las descargas.
+            # --------------------------------
+
+            self.current_artist_name = (
+                result.get(
+                    "artist",
+                    artist,
+                )
+            )
 
             for album_data in result.get(
                 "albums",
@@ -270,7 +395,7 @@ class MainWindow(QMainWindow):
                 )
 
                 # --------------------------------
-                # Guardar MBID
+                # MBID
                 # --------------------------------
 
                 album.setData(
@@ -279,6 +404,19 @@ class MainWindow(QMainWindow):
                     album_data[
                         "release_group_mbid"
                     ],
+                )
+
+                # --------------------------------
+                # Tipo
+                # --------------------------------
+
+                album.setData(
+                    0,
+                    Qt.UserRole + 3,
+                    album_data.get(
+                        "type",
+                        "album",
+                    ),
                 )
 
                 # --------------------------------
@@ -302,15 +440,13 @@ class MainWindow(QMainWindow):
 
                 # --------------------------------
                 # CHILD DUMMY
-                #
-                # Esto hace que Qt muestre
-                # la flecha de expansión.
                 # --------------------------------
 
                 placeholder = QTreeWidgetItem(
                     album,
                     [
-                        "Cargando canciones..."
+                        "Expandir para "
+                        "cargar canciones..."
                     ],
                 )
 
@@ -377,7 +513,7 @@ class MainWindow(QMainWindow):
         )
 
     # ==================================================
-    # CARGAR CANCIONES DE UN ÁLBUM
+    # CARGAR CANCIONES
     # ==================================================
 
     def load_album_songs(
@@ -402,19 +538,6 @@ class MainWindow(QMainWindow):
             return False
 
         album_name = album.text(0)
-
-        print()
-        print("=" * 60)
-
-        print(
-            f"Cargando canciones: "
-            f"{album_name}"
-        )
-
-        print(
-            f"Release Group: "
-            f"{release_group_mbid}"
-        )
 
         self.status_label.setText(
             f"Cargando canciones: "
@@ -447,10 +570,6 @@ class MainWindow(QMainWindow):
 
         if not songs:
 
-            print(
-                "No se encontraron canciones."
-            )
-
             self.status_label.setText(
                 f"No se encontraron "
                 f"canciones en {album_name}."
@@ -468,7 +587,29 @@ class MainWindow(QMainWindow):
 
             del child
 
-        for song_name in songs:
+        for song_data in songs:
+
+            # --------------------------------
+            # Soportamos tanto strings como
+            # diccionarios.
+            # --------------------------------
+
+            if isinstance(
+                song_data,
+                dict,
+            ):
+
+                song_name = song_data.get(
+                    "title",
+                    "",
+                )
+
+            else:
+
+                song_name = song_data
+
+            if not song_name:
+                continue
 
             song = QTreeWidgetItem(
                 album,
@@ -499,7 +640,7 @@ class MainWindow(QMainWindow):
 
         print(
             f"Canciones encontradas: "
-            f"{len(songs)}"
+            f"{album.childCount()}"
         )
 
         return True
@@ -527,9 +668,9 @@ class MainWindow(QMainWindow):
         if item_type == "placeholder":
             return
 
-        # ==================================================
+        # --------------------------------
         # ÁLBUM
-        # ==================================================
+        # --------------------------------
 
         if item_type == "album":
 
@@ -573,14 +714,14 @@ class MainWindow(QMainWindow):
 
                 child.setCheckState(
                     0,
-                    state,
+                    state
                 )
 
             return
 
-        # ==================================================
+        # --------------------------------
         # CANCIÓN
-        # ==================================================
+        # --------------------------------
 
         if item_type != "song":
             return
@@ -608,7 +749,6 @@ class MainWindow(QMainWindow):
                 child.checkState(0)
                 == Qt.Checked
             ):
-
                 checked_children += 1
 
         if (
@@ -634,7 +774,7 @@ class MainWindow(QMainWindow):
 
         parent.setCheckState(
             0,
-            parent_state,
+            parent_state
         )
 
     # ==================================================
@@ -645,10 +785,10 @@ class MainWindow(QMainWindow):
 
         selected_songs = []
 
-        artist = (
-            self.artist_input
-            .text()
-            .strip()
+        artist = getattr(
+            self,
+            "current_artist_name",
+            self.artist_input.text().strip(),
         )
 
         for index in range(
@@ -730,136 +870,183 @@ class MainWindow(QMainWindow):
             False
         )
 
+        self.album_checkbox.setEnabled(
+            False
+        )
+
+        self.single_checkbox.setEnabled(
+            False
+        )
+
+        self.ep_checkbox.setEnabled(
+            False
+        )
+
+        self.live_checkbox.setEnabled(
+            False
+        )
+
         total = len(songs)
 
-        for index, song in enumerate(
-            songs,
-            start=1,
-        ):
+        try:
 
-            self.status_label.setText(
-                f"Cargando canción "
-                f"{index}/{total}..."
-            )
+            for index, song in enumerate(
+                songs,
+                start=1,
+            ):
 
-            QApplication.processEvents()
-
-            print()
-            print("=" * 60)
-
-            print(
-                f"Procesando "
-                f"{index}/{total}"
-            )
-
-            print(
-                f"{song['artist']} - "
-                f"{song['title']}"
-            )
-
-            print(
-                f"Álbum: "
-                f"{song['album']}"
-            )
-
-            print(
-                f"Formato: "
-                f"{format_name.upper()}"
-            )
-
-            # --------------------------------
-            # YOUTUBE MUSIC
-            # --------------------------------
-
-            result = (
-                self.ytmusic
-                .search_song(
-                    artist=song["artist"],
-                    title=song["title"],
-                    album=song["album"],
+                self.status_label.setText(
+                    f"Cargando canción "
+                    f"{index}/{total}..."
                 )
-            )
 
-            if result is None:
+                QApplication.processEvents()
+
+                print()
+                print("=" * 60)
 
                 print(
-                    "No se encontró "
-                    "la canción."
+                    f"Procesando "
+                    f"{index}/{total}"
                 )
 
-                continue
+                print(
+                    f"{song['artist']} - "
+                    f"{song['title']}"
+                )
 
-            # --------------------------------
-            # ARTISTA
-            # --------------------------------
+                print(
+                    f"Álbum: "
+                    f"{song['album']}"
+                )
 
-            result_artist = (
-                result["artist"][0]
-                if result["artist"]
-                else song["artist"]
-            )
+                print(
+                    f"Formato: "
+                    f"{format_name.upper()}"
+                )
 
-            # --------------------------------
-            # DESCARGA
-            # --------------------------------
+                # --------------------------------
+                # YOUTUBE MUSIC
+                # --------------------------------
 
-            self.status_label.setText(
-                f"Descargando "
-                f"{index}/{total}: "
-                f"{result['title']}..."
-            )
-
-            QApplication.processEvents()
-
-            try:
-
-                file_path = (
-                    self.downloader.download(
-                        video_id=result[
-                            "video_id"
-                        ],
-                        title=result[
-                            "title"
-                        ],
-                        artist=result_artist,
-                        album=result[
-                            "album"
-                        ],
-                        format_name=format_name,
+                result = (
+                    self.youtube_music
+                    .search_song(
+                        artist=song["artist"],
+                        title=song["title"],
+                        album=song["album"],
                     )
                 )
 
-                print()
-                print(
-                    "Descarga completada:"
+                if result is None:
+
+                    print(
+                        "No se encontró "
+                        "la canción."
+                    )
+
+                    continue
+
+                result_artist = (
+                    result["artist"][0]
+                    if result["artist"]
+                    else song["artist"]
                 )
 
-                print(
-                    file_path
+                self.status_label.setText(
+                    f"Descargando "
+                    f"{index}/{total}: "
+                    f"{result['title']}..."
                 )
 
-            except Exception as error:
+                QApplication.processEvents()
 
-                print()
-                print(
-                    "ERROR:"
-                )
+                try:
 
-                print(error)
+                    file_path = (
+                        self.downloader.download(
+                            video_id=result[
+                                "video_id"
+                            ],
+                            title=result[
+                                "title"
+                            ],
+                            artist=result_artist,
+                            album=result[
+                                "album"
+                            ],
+                            format_name=format_name,
+                        )
+                    )
 
-        self.download_button.setEnabled(
-            True
-        )
+                    print()
+                    print(
+                        "Descarga completada:"
+                    )
 
-        self.search_button.setEnabled(
-            True
-        )
+                    print(
+                        file_path
+                    )
 
-        self.format_selector.setEnabled(
-            True
-        )
+                except Exception as error:
 
-        self.status_label.setText(
-            "Descargas terminadas."
-        )
+                    print()
+                    print(
+                        "ERROR:"
+                    )
 
+                    print(error)
+
+            # --------------------------------
+            # LIMPIEZA FINAL
+            # --------------------------------
+
+            self.status_label.setText(
+                "Limpiando archivos temporales..."
+            )
+
+            QApplication.processEvents()
+
+            removed = (
+                self.downloader
+                .cleanup_webp()
+            )
+
+            print()
+            print(
+                f"WebP eliminados: {removed}"
+            )
+
+            self.status_label.setText(
+                "Descargas terminadas."
+            )
+
+        finally:
+
+            self.download_button.setEnabled(
+                True
+            )
+
+            self.search_button.setEnabled(
+                True
+            )
+
+            self.format_selector.setEnabled(
+                True
+            )
+
+            self.album_checkbox.setEnabled(
+                True
+            )
+
+            self.single_checkbox.setEnabled(
+                True
+            )
+
+            self.ep_checkbox.setEnabled(
+                True
+            )
+
+            self.live_checkbox.setEnabled(
+                True
+            )
