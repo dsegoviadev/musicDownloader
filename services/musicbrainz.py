@@ -11,12 +11,6 @@ HEADERS = {
 
 
 def _request(url, params):
-    """
-    Hace una petición a MusicBrainz.
-    Reintenta automáticamente si el servidor
-    está ocupado o la conexión falla.
-    """
-
     for intento in range(3):
 
         try:
@@ -28,22 +22,11 @@ def _request(url, params):
                 timeout=10,
             )
 
-            print(response.url)
-            print(response.status_code)
-
-            # -----------------------------
-            # ÉXITO
-            # -----------------------------
-
             if response.status_code == 200:
 
                 time.sleep(1)
 
                 return response.json()
-
-            # -----------------------------
-            # SERVIDOR OCUPADO
-            # -----------------------------
 
             if response.status_code in (
                 429,
@@ -54,18 +37,9 @@ def _request(url, params):
 
                 espera = 2 ** intento
 
-                print(
-                    f"MusicBrainz ocupado. "
-                    f"Reintentando en {espera} segundos..."
-                )
-
                 time.sleep(espera)
 
                 continue
-
-            # -----------------------------
-            # OTRO ERROR
-            # -----------------------------
 
             print(
                 "Error de MusicBrainz:"
@@ -85,10 +59,6 @@ def _request(url, params):
 
             espera = 2 ** intento
 
-            print(
-                f"Reintentando en {espera} segundos..."
-            )
-
             time.sleep(espera)
 
     print(
@@ -100,6 +70,22 @@ def _request(url, params):
 
 
 # ============================================================
+# NORMALIZACIÓN
+# ============================================================
+
+def _normalize_title(value):
+
+    if not value:
+        return ""
+
+    return " ".join(
+        value.lower()
+        .strip()
+        .split()
+    )
+
+
+# ============================================================
 # BUSCAR ARTISTA + ÁLBUMES
 # ============================================================
 
@@ -107,35 +93,12 @@ def search_artist(
     artist_name,
     include_types=None,
 ):
-    """
-    Busca un artista y devuelve únicamente
-    los release groups solicitados.
-
-    include_types puede contener:
-
-        album
-        single
-        ep
-        live
-
-    Ejemplo:
-
-        ["album"]
-
-    o:
-
-        ["album", "single", "ep"]
-    """
 
     if include_types is None:
 
         include_types = [
             "album"
         ]
-
-    # -----------------------------
-    # BUSCAR ARTISTA
-    # -----------------------------
 
     url = f"{BASE_URL}/artist"
 
@@ -169,41 +132,11 @@ def search_artist(
             "albums": [],
         }
 
-    # MusicBrainz normalmente devuelve
-    # el resultado más relevante primero.
-
     artist = artists[0]
 
     artist_mbid = artist["id"]
 
-    # --------------------------------
-    # IMPORTANTE:
-    # Usamos el nombre oficial de
-    # MusicBrainz.
-    # --------------------------------
-
     artist_name = artist["name"]
-
-    print()
-    print(
-        "Artista encontrado:"
-    )
-
-    print(
-        artist_name
-    )
-
-    print(
-        "MBID:"
-    )
-
-    print(
-        artist_mbid
-    )
-
-    # -----------------------------
-    # OBTENER RELEASE GROUPS
-    # -----------------------------
 
     release_groups_result = (
         get_artist_albums(
@@ -227,9 +160,29 @@ def search_artist(
 
     albums = []
 
-    # ========================================================
-    # FILTRAR RELEASE GROUPS
-    # ========================================================
+    blocked_secondary_types = {
+        "compilation",
+        "demo",
+        "remix",
+        "dj-mix",
+        "mixtape",
+        "soundtrack",
+        "spokenword",
+        "audio drama",
+    }
+
+    blocked_terms = [
+        "live",
+        "concert",
+        "bootleg",
+        "compilation",
+        "greatest hits",
+        "best of",
+        "remix",
+        "remixes",
+        "demo",
+        "mix",
+    ]
 
     for release_group in release_groups:
 
@@ -333,43 +286,11 @@ def search_artist(
         if "album" not in include_types:
             continue
 
-        # --------------------------------
-        # TIPOS SECUNDARIOS EXCLUIDOS
-        # --------------------------------
-
-        blocked_secondary_types = {
-            "compilation",
-            "demo",
-            "remix",
-            "dj-mix",
-            "mixtape",
-            "soundtrack",
-            "spokenword",
-            "audio drama",
-        }
-
         if any(
             value in blocked_secondary_types
             for value in secondary_types
         ):
             continue
-
-        # --------------------------------
-        # FILTRO EXTRA POR NOMBRE
-        # --------------------------------
-
-        blocked_terms = [
-            "live",
-            "concert",
-            "bootleg",
-            "compilation",
-            "greatest hits",
-            "best of",
-            "remix",
-            "remixes",
-            "demo",
-            "mix",
-        ]
 
         if any(
             term in album_name_lower
@@ -385,12 +306,6 @@ def search_artist(
                 "type": "album",
             }
         )
-
-    print()
-    print(
-        "Releases válidos encontrados: "
-        f"{len(albums)}"
-    )
 
     return {
         "artist": artist_name,
@@ -468,18 +383,210 @@ def get_release_tracks(
 
 
 # ============================================================
+# SCORE DE RELEASE
+# ============================================================
+
+def _release_score(
+    release,
+    release_group_title,
+):
+
+    score = 0
+
+    release_title = release.get(
+        "title",
+        ""
+    )
+
+    normalized_release_title = (
+        _normalize_title(
+            release_title
+        )
+    )
+
+    normalized_group_title = (
+        _normalize_title(
+            release_group_title
+        )
+    )
+
+    # ========================================================
+    # TÍTULO
+    # ========================================================
+
+    if (
+        normalized_release_title
+        == normalized_group_title
+    ):
+
+        score += 1000
+
+    else:
+
+        score -= 100
+
+    # ========================================================
+    # STATUS
+    # ========================================================
+
+    status = (
+        release.get(
+            "status",
+            ""
+        )
+        or ""
+    ).lower()
+
+    if status == "official":
+
+        score += 500
+
+    elif status == "promotion":
+
+        score -= 200
+
+    elif status == "pseudo-release":
+
+        score -= 300
+
+    elif status == "bootleg":
+
+        score -= 500
+
+    # ========================================================
+    # TÍTULOS DE EDICIONES ESPECIALES
+    # ========================================================
+
+    special_terms = [
+        "deluxe",
+        "bonus",
+        "anniversary",
+        "expanded",
+        "special edition",
+        "limited edition",
+        "remastered",
+        "reissue",
+        "edition",
+        "collector",
+        "in his own words",
+        "instrumental",
+        "karaoke",
+    ]
+
+    title_lower = normalized_release_title
+
+    for term in special_terms:
+
+        if term in title_lower:
+
+            score -= 400
+
+    # ========================================================
+    # FECHA
+    #
+    # Releases más antiguos tienen prioridad.
+    # ========================================================
+
+    date = (
+        release.get(
+            "date",
+            ""
+        )
+        or ""
+    )
+
+    if date:
+
+        try:
+
+            year = int(
+                date[:4]
+            )
+
+            score += max(
+                0,
+                2100 - year
+            )
+
+        except (
+            ValueError,
+            TypeError,
+        ):
+
+            pass
+
+    # ========================================================
+    # PAÍS
+    #
+    # No usamos país como criterio fuerte porque queremos
+    # permitir diferentes ediciones oficiales equivalentes.
+    # ========================================================
+
+    country = (
+        release.get(
+            "country"
+        )
+    )
+
+    if country == "XW":
+
+        score += 10
+
+    return score
+
+
+# ============================================================
+# ELEGIR RELEASE PRINCIPAL
+# ============================================================
+
+def _select_best_release(
+    releases,
+    release_group_title,
+):
+
+    if not releases:
+
+        return None
+
+    candidates = []
+
+    for release in releases:
+
+        release_score = (
+            _release_score(
+                release,
+                release_group_title,
+            )
+        )
+
+        candidates.append(
+            (
+                release_score,
+                release
+            )
+        )
+
+    candidates.sort(
+        key=lambda value: (
+            value[0],
+            value[1].get(
+                "date",
+                ""
+            ),
+        ),
+        reverse=True,
+    )
+
+    return candidates[0][1]
+
+
+# ============================================================
 # OBTENER CANCIONES DE UN ÁLBUM
 # ============================================================
 
 def get_album_tracks(
     release_group_mbid
 ):
-    """
-    Obtiene las canciones de un release group.
-
-    Este request solamente se realiza cuando
-    el usuario expande el álbum en la interfaz.
-    """
 
     releases_result = (
         get_release_group_releases(
@@ -500,15 +607,63 @@ def get_album_tracks(
     if not releases:
         return []
 
-    # --------------------------------
-    # Elegir el release principal.
-    #
-    # Preferimos uno que tenga tracks.
-    # --------------------------------
+    # ========================================================
+    # OBTENER TÍTULO DEL RELEASE GROUP
+    # ========================================================
 
-    release = releases[0]
+    release_group_url = (
+        f"{BASE_URL}/release-group/"
+        f"{release_group_mbid}"
+    )
 
-    release_mbid = release["id"]
+    release_group_result = _request(
+        release_group_url,
+        {
+            "fmt": "json",
+        },
+    )
+
+    if release_group_result:
+
+        release_group_title = (
+            release_group_result.get(
+                "title",
+                ""
+            )
+        )
+
+    else:
+
+        release_group_title = (
+            releases[0].get(
+                "title",
+                ""
+            )
+        )
+
+    # ========================================================
+    # ELEGIR UNA SOLA EDICIÓN
+    # ========================================================
+
+    release = _select_best_release(
+        releases,
+        release_group_title,
+    )
+
+    if not release:
+
+        return []
+
+    release_mbid = release.get(
+        "id"
+    )
+
+    if not release_mbid:
+        return []
+
+    # ========================================================
+    # OBTENER TRACKLIST
+    # ========================================================
 
     tracks_result = (
         get_release_tracks(
@@ -537,10 +692,11 @@ def get_album_tracks(
                 "title"
             )
 
-            if title:
+            if not title:
+                continue
 
-                songs.append(
-                    title
-                )
+            songs.append(
+                title
+            )
 
     return songs

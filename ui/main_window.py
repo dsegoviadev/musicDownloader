@@ -1,12 +1,12 @@
-from pathlib import Path
-
 from PySide6.QtCore import (
+    QObject,
     QSignalBlocker,
+    QThread,
     Qt,
+    Signal,
 )
 
 from PySide6.QtWidgets import (
-    QApplication,
     QCheckBox,
     QComboBox,
     QHBoxLayout,
@@ -34,6 +34,42 @@ from services.downloader import (
 )
 
 
+class AlbumTracksWorker(QObject):
+
+    finished = Signal(object, object)
+    failed = Signal(object, object, str)
+
+    def __init__(
+        self,
+        album_mbid,
+        album_name,
+    ):
+        super().__init__()
+
+        self.album_mbid = album_mbid
+        self.album_name = album_name
+
+    def run(self):
+
+        try:
+            songs = get_album_tracks(
+                self.album_mbid
+            )
+
+            self.finished.emit(
+                self.album_mbid,
+                songs,
+            )
+
+        except Exception as error:
+
+            self.failed.emit(
+                self.album_mbid,
+                self.album_name,
+                str(error),
+            )
+
+
 class MainWindow(QMainWindow):
 
     def __init__(self):
@@ -49,10 +85,6 @@ class MainWindow(QMainWindow):
             650,
         )
 
-        # ==================================================
-        # SERVICIOS
-        # ==================================================
-
         self.youtube_music = (
             YouTubeMusic()
         )
@@ -63,11 +95,11 @@ class MainWindow(QMainWindow):
 
         self.current_artist_name = ""
 
-        self.setup_ui()
+        self.album_threads = {}
+        self.album_workers = {}
+        self.pending_album_states = {}
 
-    # ==================================================
-    # UI
-    # ==================================================
+        self.setup_ui()
 
     def setup_ui(self):
 
@@ -83,10 +115,6 @@ class MainWindow(QMainWindow):
             central_widget
         )
 
-        # ==================================================
-        # TÍTULO
-        # ==================================================
-
         title = QLabel(
             "Music Downloader"
         )
@@ -94,10 +122,6 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(
             title
         )
-
-        # ==================================================
-        # BUSCADOR
-        # ==================================================
 
         search_layout = QHBoxLayout()
 
@@ -126,10 +150,6 @@ class MainWindow(QMainWindow):
         main_layout.addLayout(
             search_layout
         )
-
-        # ==================================================
-        # FORMATO
-        # ==================================================
 
         format_layout = QHBoxLayout()
 
@@ -165,10 +185,6 @@ class MainWindow(QMainWindow):
             format_layout
         )
 
-        # ==================================================
-        # TIPOS DE RELEASE
-        # ==================================================
-
         release_type_label = QLabel(
             "Incluir:"
         )
@@ -194,10 +210,6 @@ class MainWindow(QMainWindow):
         self.live_checkbox = QCheckBox(
             "Lives"
         )
-
-        # ==================================================
-        # DEFAULTS
-        # ==================================================
 
         self.album_checkbox.setChecked(
             True
@@ -237,13 +249,7 @@ class MainWindow(QMainWindow):
             release_type_layout
         )
 
-        # ==================================================
-        # RESULTADOS
-        # ==================================================
-
-        self.results_tree = (
-            QTreeWidget()
-        )
+        self.results_tree = QTreeWidget()
 
         self.results_tree.setHeaderLabels(
             ["Álbumes / Canciones"]
@@ -261,14 +267,8 @@ class MainWindow(QMainWindow):
             self.results_tree
         )
 
-        # ==================================================
-        # DESCARGAR
-        # ==================================================
-
-        self.download_button = (
-            QPushButton(
-                "Descargar seleccionadas"
-            )
+        self.download_button = QPushButton(
+            "Descargar seleccionadas"
         )
 
         self.download_button.clicked.connect(
@@ -279,10 +279,6 @@ class MainWindow(QMainWindow):
             self.download_button
         )
 
-        # ==================================================
-        # ESTADO
-        # ==================================================
-
         self.status_label = QLabel(
             "Listo."
         )
@@ -290,10 +286,6 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(
             self.status_label
         )
-
-    # ==================================================
-    # BUSCAR ARTISTA
-    # ==================================================
 
     def search_artist(self):
 
@@ -345,8 +337,6 @@ class MainWindow(QMainWindow):
             "Cargando álbumes..."
         )
 
-        QApplication.processEvents()
-
         self.search_button.setEnabled(
             False
         )
@@ -364,9 +354,7 @@ class MainWindow(QMainWindow):
 
             self.results_tree.clear()
 
-            # ==================================================
-            # ARTISTA REAL DE MUSICBRAINZ
-            # ==================================================
+            self.pending_album_states.clear()
 
             self.current_artist_name = (
                 result.get(
@@ -374,10 +362,6 @@ class MainWindow(QMainWindow):
                     artist,
                 )
             )
-
-            # ==================================================
-            # ÁLBUMES
-            # ==================================================
 
             for album_data in result.get(
                 "albums",
@@ -391,15 +375,11 @@ class MainWindow(QMainWindow):
                     ],
                 )
 
-                # Tipo de nodo
-
                 album.setData(
                     0,
                     Qt.UserRole,
                     "album",
                 )
-
-                # MBID
 
                 album.setData(
                     0,
@@ -408,8 +388,6 @@ class MainWindow(QMainWindow):
                         "release_group_mbid"
                     ],
                 )
-
-                # Tipo de release
 
                 album.setData(
                     0,
@@ -420,22 +398,16 @@ class MainWindow(QMainWindow):
                     ),
                 )
 
-                # Canciones aún no cargadas
-
                 album.setData(
                     0,
                     Qt.UserRole + 2,
                     False,
                 )
 
-                # Checkbox
-
                 album.setCheckState(
                     0,
                     Qt.Unchecked,
                 )
-
-                # Placeholder
 
                 placeholder = QTreeWidgetItem(
                     album,
@@ -478,10 +450,6 @@ class MainWindow(QMainWindow):
                 True
             )
 
-    # ==================================================
-    # EXPANDIR ÁLBUM
-    # ==================================================
-
     def handle_item_expanded(
         self,
         item,
@@ -507,10 +475,6 @@ class MainWindow(QMainWindow):
             item
         )
 
-    # ==================================================
-    # CARGAR CANCIONES
-    # ==================================================
-
     def load_album_songs(
         self,
         album,
@@ -532,6 +496,9 @@ class MainWindow(QMainWindow):
         if not release_group_mbid:
             return False
 
+        if release_group_mbid in self.album_threads:
+            return True
+
         album_name = album.text(0)
 
         self.status_label.setText(
@@ -539,29 +506,91 @@ class MainWindow(QMainWindow):
             f"{album_name}..."
         )
 
-        QApplication.processEvents()
+        self.pending_album_states[
+            release_group_mbid
+        ] = (
+            album.checkState(0)
+            == Qt.Checked
+        )
 
-        try:
+        thread = QThread(
+            self
+        )
 
-            songs = get_album_tracks(
-                release_group_mbid
+        worker = AlbumTracksWorker(
+            release_group_mbid,
+            album_name,
+        )
+
+        worker.moveToThread(
+            thread
+        )
+
+        thread.started.connect(
+            worker.run
+        )
+
+        worker.finished.connect(
+            self.album_tracks_loaded
+        )
+
+        worker.failed.connect(
+            self.album_tracks_failed
+        )
+
+        worker.finished.connect(
+            thread.quit
+        )
+
+        worker.failed.connect(
+            thread.quit
+        )
+
+        worker.finished.connect(
+            worker.deleteLater
+        )
+
+        worker.failed.connect(
+            worker.deleteLater
+        )
+
+        thread.finished.connect(
+            thread.deleteLater
+        )
+
+        thread.finished.connect(
+            lambda mbid=release_group_mbid:
+            self.cleanup_album_worker(
+                mbid
             )
+        )
 
-        except Exception as error:
+        self.album_threads[
+            release_group_mbid
+        ] = thread
 
-            print()
-            print(
-                "ERROR cargando canciones:"
-            )
+        self.album_workers[
+            release_group_mbid
+        ] = worker
 
-            print(error)
+        thread.start()
 
-            self.status_label.setText(
-                f"Error cargando canciones "
-                f"de {album_name}."
-            )
+        return True
 
-            return False
+    def album_tracks_loaded(
+        self,
+        release_group_mbid,
+        songs,
+    ):
+
+        album = self.find_album_by_mbid(
+            release_group_mbid
+        )
+
+        if album is None:
+            return
+
+        album_name = album.text(0)
 
         if not songs:
 
@@ -570,7 +599,14 @@ class MainWindow(QMainWindow):
                 f"canciones en {album_name}."
             )
 
-            return False
+            return
+
+        should_check = (
+            self.pending_album_states.get(
+                release_group_mbid,
+                False,
+            )
+        )
 
         blocker = QSignalBlocker(
             self.results_tree
@@ -582,9 +618,7 @@ class MainWindow(QMainWindow):
 
             del child
 
-        # ==================================================
-        # CANCIONES
-        # ==================================================
+        valid_song_count = 0
 
         for song_data in songs:
 
@@ -618,8 +652,12 @@ class MainWindow(QMainWindow):
 
             song.setCheckState(
                 0,
-                Qt.Unchecked,
+                Qt.Checked
+                if should_check
+                else Qt.Unchecked,
             )
+
+            valid_song_count += 1
 
         album.setData(
             0,
@@ -627,21 +665,93 @@ class MainWindow(QMainWindow):
             True,
         )
 
+        album.setCheckState(
+            0,
+            Qt.Checked
+            if should_check
+            else Qt.Unchecked,
+        )
+
+        del blocker
+
         self.status_label.setText(
             f"Canciones cargadas: "
             f"{album_name}"
         )
 
+        print()
         print(
             f"Canciones encontradas: "
-            f"{album.childCount()}"
+            f"{valid_song_count}"
         )
 
-        return True
+    def album_tracks_failed(
+        self,
+        release_group_mbid,
+        album_name,
+        error,
+    ):
 
-    # ==================================================
-    # CHECKBOXES
-    # ==================================================
+        print()
+        print(
+            "ERROR cargando canciones:"
+        )
+
+        print(error)
+
+        self.status_label.setText(
+            f"Error cargando canciones "
+            f"de {album_name}."
+        )
+
+    def cleanup_album_worker(
+        self,
+        release_group_mbid,
+    ):
+
+        thread = self.album_threads.pop(
+            release_group_mbid,
+            None,
+        )
+
+        self.album_workers.pop(
+            release_group_mbid,
+            None,
+        )
+
+        self.pending_album_states.pop(
+            release_group_mbid,
+            None,
+        )
+
+        if thread is not None:
+
+            thread.deleteLater()
+
+    def find_album_by_mbid(
+        self,
+        release_group_mbid,
+    ):
+
+        for index in range(
+            self.results_tree.topLevelItemCount()
+        ):
+
+            album = (
+                self.results_tree
+                .topLevelItem(index)
+            )
+
+            album_mbid = album.data(
+                0,
+                Qt.UserRole + 1,
+            )
+
+            if album_mbid == release_group_mbid:
+
+                return album
+
+        return None
 
     def handle_item_changed(
         self,
@@ -662,11 +772,12 @@ class MainWindow(QMainWindow):
         if item_type == "placeholder":
             return
 
-        # ==================================================
-        # ÁLBUM
-        # ==================================================
-
         if item_type == "album":
+
+            release_group_mbid = item.data(
+                0,
+                Qt.UserRole + 1,
+            )
 
             loaded = item.data(
                 0,
@@ -675,19 +786,17 @@ class MainWindow(QMainWindow):
 
             if not loaded:
 
-                blocker = QSignalBlocker(
-                    self.results_tree
+                self.pending_album_states[
+                    release_group_mbid
+                ] = (
+                    state == Qt.Checked
                 )
 
-                item.setCheckState(
-                    0,
-                    Qt.Unchecked,
-                )
+                if state == Qt.Checked:
 
-                self.status_label.setText(
-                    "Abre el álbum para "
-                    "cargar sus canciones."
-                )
+                    self.load_album_songs(
+                        item
+                    )
 
                 return
 
@@ -706,16 +815,23 @@ class MainWindow(QMainWindow):
                     index
                 )
 
+                if (
+                    child.data(
+                        0,
+                        Qt.UserRole,
+                    )
+                    != "song"
+                ):
+                    continue
+
                 child.setCheckState(
                     0,
                     state
                 )
 
-            return
+            del blocker
 
-        # ==================================================
-        # CANCIÓN
-        # ==================================================
+            return
 
         if item_type != "song":
             return
@@ -726,13 +842,10 @@ class MainWindow(QMainWindow):
             return
 
         checked_children = 0
-
-        total_children = (
-            parent.childCount()
-        )
+        total_children = 0
 
         for index in range(
-            total_children
+            parent.childCount()
         ):
 
             child = parent.child(
@@ -740,11 +853,25 @@ class MainWindow(QMainWindow):
             )
 
             if (
+                child.data(
+                    0,
+                    Qt.UserRole,
+                )
+                != "song"
+            ):
+                continue
+
+            total_children += 1
+
+            if (
                 child.checkState(0)
                 == Qt.Checked
             ):
 
                 checked_children += 1
+
+        if total_children == 0:
+            return
 
         if (
             checked_children
@@ -772,17 +899,13 @@ class MainWindow(QMainWindow):
             parent_state
         )
 
-    # ==================================================
-    # CANCIONES SELECCIONADAS
-    # ==================================================
+        del blocker
 
-    def get_selected_songs(self):
+    def get_selected_songs(
+        self
+    ):
 
         selected_songs = []
-
-        # ==================================================
-        # MUSICBRAINZ ES LA FUENTE DE VERDAD
-        # ==================================================
 
         artist = getattr(
             self,
@@ -832,10 +955,6 @@ class MainWindow(QMainWindow):
                     )
 
         return selected_songs
-
-    # ==================================================
-    # DESCARGAR
-    # ==================================================
 
     def download_selected_songs(
         self
@@ -901,8 +1020,6 @@ class MainWindow(QMainWindow):
                     f"{index}/{total}..."
                 )
 
-                QApplication.processEvents()
-
                 print()
                 print(
                     "=" * 60
@@ -928,18 +1045,6 @@ class MainWindow(QMainWindow):
                     f"{format_name.upper()}"
                 )
 
-                # ==================================================
-                # YOUTUBE MUSIC
-                #
-                # IMPORTANTE:
-                #
-                # YouTube Music solamente decide qué VIDEO
-                # descargar.
-                #
-                # NO decide el artista ni el álbum donde
-                # se guardará.
-                # ==================================================
-
                 result = (
                     self.youtube_music
                     .search_song(
@@ -957,10 +1062,6 @@ class MainWindow(QMainWindow):
                     )
 
                     continue
-
-                # ==================================================
-                # INFORMACIÓN ENCONTRADA
-                # ==================================================
 
                 print()
                 print(
@@ -986,23 +1087,6 @@ class MainWindow(QMainWindow):
                     f"Video ID: "
                     f"{result['video_id']}"
                 )
-
-                # ==================================================
-                # IMPORTANTE
-                #
-                # Para el Downloader usamos:
-                #
-                # artist = MusicBrainz
-                # album  = MusicBrainz
-                # title  = MusicBrainz
-                #
-                # y únicamente:
-                #
-                # video_id = YouTube Music
-                #
-                # Esto evita que un resultado de YouTube que
-                # aparezca como "Single" cambie nuestra estructura.
-                # ==================================================
 
                 download_artist = song[
                     "artist"
@@ -1036,17 +1120,11 @@ class MainWindow(QMainWindow):
                     f"{download_title}"
                 )
 
-                # ==================================================
-                # DESCARGAR
-                # ==================================================
-
                 self.status_label.setText(
                     f"Descargando "
                     f"{index}/{total}: "
                     f"{download_title}..."
                 )
-
-                QApplication.processEvents()
 
                 try:
 
@@ -1055,17 +1133,9 @@ class MainWindow(QMainWindow):
                             video_id=result[
                                 "video_id"
                             ],
-
-                            # -----------------------------
-                            # MUSICBRAINZ
-                            # -----------------------------
-
                             title=download_title,
-
                             artist=download_artist,
-
                             album=download_album,
-
                             format_name=format_name,
                         )
                     )
@@ -1088,15 +1158,9 @@ class MainWindow(QMainWindow):
 
                     print(error)
 
-            # ==================================================
-            # LIMPIEZA FINAL
-            # ==================================================
-
             self.status_label.setText(
                 "Limpiando archivos temporales..."
             )
-
-            QApplication.processEvents()
 
             removed = (
                 self.downloader
@@ -1141,3 +1205,32 @@ class MainWindow(QMainWindow):
             self.live_checkbox.setEnabled(
                 True
             )
+
+    def closeEvent(
+        self,
+        event,
+    ):
+
+        threads = list(
+            self.album_threads.values()
+        )
+
+        for thread in threads:
+
+            if thread.isRunning():
+
+                thread.quit()
+
+        for thread in threads:
+
+            if thread.isRunning():
+
+                thread.wait()
+
+        self.album_threads.clear()
+        self.album_workers.clear()
+        self.pending_album_states.clear()
+
+        super().closeEvent(
+            event
+        )
